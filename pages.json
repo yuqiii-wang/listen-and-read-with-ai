@@ -10,6 +10,7 @@
 					"path" : "pages/library/LibraryBook",
 					"style" : 
 					{
+						"navigationStyle": "custom",
 						"navigationBarTitleText" : "Library Book"
 					}
 				},
@@ -17,6 +18,25 @@
 					"path": "pages/index/Settings",
 					"style": {
 						"navigationBarTitleText": "Settings"
+					}
+				},
+				{
+					"path": "pages/index/BookManagement",
+					"style": {
+						"navigationBarTitleText": "BookManagement"
+					}
+				},
+				{
+					"path": "pages/index/Profile",
+					"style": {
+						"navigationBarTitleText": "Profile"
+					}
+				},
+				{
+					"path" : "components/BookImport",
+					"style" : 
+					{
+						"navigationBarTitleText" : ""
 					}
 				}
 	],

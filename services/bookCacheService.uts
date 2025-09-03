@@ -1,0 +1,754 @@
+// Assuming uni-app types are available, otherwise you might need to declare the 'uni' object.
+// For example, create a file `uni.d.ts` with:
+// declare const uni: any;
+
+// --- Interface Definitions for Type Safety ---
+
+/**
+ * Basic metadata for a book.
+ */
+interface BookMetadata {
+  bookId: number;
+  isMarketAvailable?: boolean; // Optional as it might not be relevant for all contexts
+  title: string;
+  author: string;
+  tags: string[];
+  summary: string;
+  reader: string;
+  cover: string;
+}
+
+/**
+ * User-specific metadata and progress for a book.
+ */
+interface ReaderMetadata {
+  bookId: number;
+  version: number;
+  readTime: number; // in seconds
+  lastReadSentenceId: number;
+  isAudioPlaying: boolean;
+  customTitle: string | null;
+  customSummary: string | null;
+  customTags: string[];
+}
+
+/**
+ * A single sentence within a book's content.
+ */
+interface Sentence {
+  sentenceId: number;
+  version: number;
+  content: string;
+}
+
+/**
+ * The main content of a book, consisting of sentences.
+ */
+interface BookContent {
+  bookId: number;
+  sentences: Sentence[];
+}
+
+/**
+ * Audio data for a single sentence.
+ */
+interface AudioData {
+  sentenceId: number;
+  version: number;
+  audio: string | null; // Base64 data URI or null
+}
+
+/**
+ * Container for all audio data of a book.
+ */
+interface BookAudio {
+  bookId: number;
+  audioData: AudioData[];
+}
+
+/**
+ * Represents a single version of a book.
+ */
+interface Version {
+  version: number;
+  taskName: string;
+  versionCreatedAt: string;
+  isAiTaskInProgress: boolean;
+  aiTasksInProgress: number;
+}
+
+/**
+ * Represents a running AI task for generating a new version.
+ */
+interface AITask {
+  id: string;
+  name: string;
+  progress: number;
+  newVersionId: number;
+  parentVersionId: number;
+}
+
+/**
+ * Manages all versions and running AI tasks for a book.
+ */
+interface BookVersions {
+  bookId: number;
+  currentVersionId: number;
+  runningAiTasks: AITask[];
+  allVersions: Version[];
+}
+
+/**
+ * A comprehensive object representing all data for a single book.
+ */
+interface ComprehensiveBook {
+  metadata: BookMetadata;
+  readerMetadata: ReaderMetadata;
+  content: BookContent;
+  versions: BookVersions;
+  audio: BookAudio;
+}
+
+// Defines the possible types for storage keys.
+type StorageKeyType = 'metadata' | 'readerMetadata' | 'data' | 'versions' | 'audio';
+type ListStorageKey = 'all_books' | 'market_books' | 'library_books';
+
+
+/**
+ * A service to manage book content storage using uni-app's storage API.
+ * The data is structured into five distinct parts:
+ * - book.metadata (title, author, summary, etc.)
+ * - book.readerMetadata (last read position, custom fields, etc.)
+ * - book.content (sentences)
+ * - book.versions (version history)
+ * - book.audio (audio data for sentences)
+ * It also manages lists of all available books, market books, and user's library books.
+ */
+class BookCacheService {
+
+  // --- Key Definitions ---
+  private getStorageKey(bookId: number, type: StorageKeyType): string;
+  private getStorageKey(bookId: null, type: ListStorageKey): string;
+  private getStorageKey(bookId: number | null, type: StorageKeyType | ListStorageKey): string {
+    switch (type) {
+      case 'metadata':
+        return `book_metadata_${bookId}`;
+      case 'readerMetadata':
+        return `book_reader_metadata_${bookId}`;
+      case 'data':
+        return `book_content_${bookId}`;
+      case 'versions':
+        return `book_all_version_${bookId}`;
+      case 'audio':
+        return `book_audio_${bookId}`;
+      default:
+        // For lists that are not book-specific (e.g., 'all_books')
+        return type;
+    }
+  }
+
+  // --- Utility and ID Generation ---
+  private generateNewBookId(): number {
+    const allBooks = this.getAllBooks();
+    if (!allBooks || allBooks.length === 0) {
+      return 1;
+    }
+    const maxId = allBooks.reduce((max, book) => Math.max(max, book.bookId), 0);
+    return maxId + 1;
+  }
+
+
+  // --- Mock Data Creation ---
+
+  /**
+   * Creates the initial lists of books for the app with basic metadata.
+   * REWRITTEN LOGIC: The marketBooks list is now dynamically generated from allBooks
+   * based on the `isMarketAvailable` flag.
+   */
+  private createInitialBookLists(): {
+    allBooks: BookMetadata[],
+    marketBooks: number[],
+    libraryBooks: number[]
+  } {
+    const allBooks: BookMetadata[] = [{
+      bookId: 1,
+      isMarketAvailable: true,
+      title: "The First Adventure",
+      author: "AI Author",
+      tags: ["Fantasy", "AI", "Adventure"],
+      summary: "A thrilling tale of a hero's first journey into a world of magic and machines.",
+      reader: "Professional Narrator",
+      cover: "/static/covers/cover1.png",
+    }, {
+      bookId: 2,
+      isMarketAvailable: true,
+      title: "Journey to the Unknown",
+      author: "AI Author",
+      tags: ["Sci-Fi", "Mystery"],
+      summary: "An epic saga that explores the vast, unknown regions of the galaxy.",
+      reader: "AI Voice",
+      cover: "/static/covers/cover2.png",
+    }, {
+      bookId: 3,
+      isMarketAvailable: false,
+      title: "Journey to the Unknown AAA",
+      author: "AI Author",
+      tags: ["Sci-Fi", "Mystery"],
+      summary: "An epic saga that explores the vast, unknown regions of the galaxy AAA.",
+      reader: "AI Voice",
+      cover: "/static/covers/cover3.png",
+    }, ];
+
+    // Relevant Logic: Only books where isMarketAvailable is true shall be in marketBooks.
+    const marketBooks: number[] = allBooks
+      .filter(book => book.isMarketAvailable)
+      .map(book => book.bookId);
+
+    const libraryBooks: number[] = []; // bookIds
+
+    return {
+      allBooks,
+      marketBooks,
+      libraryBooks
+    };
+  }
+
+
+  /**
+   * Creates mock reader metadata for a single book.
+   */
+  private createMockReaderMetadata(bookId: number): ReaderMetadata {
+    return {
+      bookId: bookId,
+      version: 1, // Default to reading the first version
+      readTime: 0, // In seconds
+      lastReadSentenceId: 0,
+      isAudioPlaying: false,
+      // New customizable fields
+      customTitle: null,
+      customSummary: null,
+      customTags: [],
+    };
+  }
+
+  /**
+   * Creates detailed mock data for a single book's content.
+   */
+  private createMockBookDetailData(bookId: number): {
+    bookData: BookContent,
+    bookAllVersion: BookVersions,
+    BookAudio: BookAudio
+  } {
+    // A short, silent WAV file encoded in Base64. This is a playable data URI.
+    const silentAudioBase64 = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+
+    const bookData: BookContent = {
+      bookId: bookId,
+      sentences: []
+    };
+    const bookAllVersion: BookVersions = {
+      bookId: bookId,
+      currentVersionId: 2,
+      runningAiTasks: [], // Holds the full details of any running tasks
+      allVersions: [{
+        version: 1,
+        taskName: "Initial Draft",
+        versionCreatedAt: new Date(Date.now() - 86400000).toLocaleString(),
+        isAiTaskInProgress: false,
+        aiTasksInProgress: 0
+      }, {
+        version: 2,
+        taskName: "AI-Enhanced Rewrite",
+        versionCreatedAt: new Date().toLocaleString(),
+        isAiTaskInProgress: false,
+        aiTasksInProgress: 0
+      }, ]
+    };
+    const BookAudio: BookAudio = {
+      bookId: bookId,
+      audioData: []
+    };
+
+    let sentenceIdCounter = 0;
+
+    // --- Version 1 Content ---
+    const version1Content = "This is the original version of the book. It tells a simple tale. ";
+    for (let i = 0; i < 150; i++) {
+      const sentenceId = sentenceIdCounter++;
+      bookData.sentences.push({
+        sentenceId: sentenceId,
+        version: 1,
+        content: `${i + 1}. ${version1Content}`
+      });
+      BookAudio.audioData.push({
+        sentenceId: sentenceId,
+        version: 1,
+        audio: silentAudioBase64
+      });
+    }
+
+    // --- Version 2 Content (An AI-modified version) ---
+    const version2Content = "This is the AI-enhanced version of the book, with a more elaborate and descriptive narrative. ";
+    for (let i = 0; i < 200; i++) {
+      const sentenceId = sentenceIdCounter++;
+      bookData.sentences.push({
+        sentenceId: sentenceId,
+        version: 2,
+        content: `${i + 1}. ${version2Content}`
+      });
+      BookAudio.audioData.push({
+        sentenceId: sentenceId,
+        version: 2,
+        audio: silentAudioBase64
+      });
+    }
+
+    return {
+      bookData,
+      bookAllVersion,
+      BookAudio
+    };
+  }
+
+  // --- Getters for Book Lists ---
+
+  public getAllBooks(): BookMetadata[] {
+    const storageKey = this.getStorageKey(null, 'all_books');
+    try {
+      const allBooks = uni.getStorageSync(storageKey) as BookMetadata[];
+      if (allBooks && allBooks.length) {
+        return allBooks;
+      } else {
+        // Create and save initial book lists and their metadata
+        const initialData = this.createInitialBookLists();
+        this.saveAllBooks(initialData.allBooks);
+        this.saveMarketBooks(initialData.marketBooks);
+        this.saveLibraryBooks(initialData.libraryBooks);
+
+        // Also create mock details and metadata for the initial books
+        initialData.allBooks.forEach(book => {
+          this.getBookContentById(book.bookId); // Creates content
+          this.getBookMetadata(book.bookId); // Creates metadata
+          this.getReaderMetadata(book.bookId); // Creates reader metadata
+        });
+        return initialData.allBooks;
+      }
+    } catch (e) {
+      console.error('Failed to get all books from storage:', e);
+      return [];
+    }
+  }
+
+  public getMarketBooks(): number[] {
+    const storageKey = this.getStorageKey(null, 'market_books');
+    try {
+      const marketBooks = uni.getStorageSync(storageKey) as number[];
+      if (marketBooks && marketBooks.length) {
+        return marketBooks;
+      } else {
+        const initialData = this.createInitialBookLists();
+        this.saveMarketBooks(initialData.marketBooks);
+        return initialData.marketBooks;
+      }
+    } catch (e) {
+      console.error('Failed to get market books from storage:', e);
+      return [];
+    }
+  }
+
+  public getLibraryBooks(): number[] {
+    const storageKey = this.getStorageKey(null, 'library_books');
+    try {
+      const libraryBooks = uni.getStorageSync(storageKey) as number[];
+      // Note: It's okay for library books to be initially empty
+      if (libraryBooks) {
+        return libraryBooks;
+      } else {
+        const initialData = this.createInitialBookLists();
+        this.saveLibraryBooks(initialData.libraryBooks);
+        return initialData.libraryBooks;
+      }
+    } catch (e) {
+      console.error('Failed to get library books from storage:', e);
+      return [];
+    }
+  }
+
+  // --- Savers for Book Lists ---
+
+  public saveAllBooks(allBooks: BookMetadata[]): void {
+    const storageKey = this.getStorageKey(null, 'all_books');
+    try {
+      uni.setStorageSync(storageKey, allBooks);
+    } catch (e) {
+      console.error('Failed to save all books to storage:', e);
+    }
+  }
+
+  public saveMarketBooks(marketBooks: number[]): void {
+    const storageKey = this.getStorageKey(null, 'market_books');
+    try {
+      uni.setStorageSync(storageKey, marketBooks);
+    } catch (e) {
+      console.error('Failed to save market books to storage:', e);
+    }
+  }
+
+  public saveLibraryBooks(libraryBooks: number[]): void {
+    const storageKey = this.getStorageKey(null, 'library_books');
+    try {
+      uni.setStorageSync(storageKey, libraryBooks);
+    } catch (e) {
+      console.error('Failed to save library books to storage:', e);
+    }
+  }
+
+
+  // --- NEW FUNCTION for adding market books to the library ---
+
+  /**
+   * Adds a book from the market to the user's library.
+   * Logic: A book can be added to the library if it exists in the market books
+   * and is not already in the library. This fulfills the requirement that all
+   * market books are okay to add to library books.
+   * @param {number} bookId The ID of the book to add.
+   * @returns {boolean} True if the book was successfully added, false otherwise.
+   */
+  public addBookToLibrary(bookId: number): boolean {
+    const marketBooks = this.getMarketBooks();
+    const libraryBooks = this.getLibraryBooks();
+
+    const isBookInMarket = marketBooks.includes(bookId);
+    const isBookAlreadyInLibrary = libraryBooks.includes(bookId);
+
+    if (isBookInMarket && !isBookAlreadyInLibrary) {
+      const updatedLibraryBooks = [...libraryBooks, bookId];
+      this.saveLibraryBooks(updatedLibraryBooks);
+      console.log(`Book with ID ${bookId} was successfully added to the library.`);
+      return true;
+    } else {
+      if (!isBookInMarket) {
+        console.warn(`Failed to add book ${bookId} to library: It is not available in the market.`);
+      }
+      if (isBookAlreadyInLibrary) {
+        console.warn(`Failed to add book ${bookId} to library: It is already in the library.`);
+      }
+      return false;
+    }
+  }
+
+
+  // --- Getters and Savers for Individual Book Parts ---
+
+  /**
+   * Gets a book's metadata (title, author, summary, etc.).
+   */
+  public getBookMetadata(bookId: number): BookMetadata | null {
+    const storageKey = this.getStorageKey(bookId, 'metadata');
+    try {
+      const metadata = uni.getStorageSync(storageKey) as BookMetadata;
+      if (metadata) {
+        return metadata;
+      } else {
+        // If not in storage, find it in the main list, save it, and return it
+        const allBooks = this.getAllBooks();
+        const bookInfo = allBooks.find(b => b.bookId === bookId);
+        if (bookInfo) {
+          this.saveBookMetadata(bookId, bookInfo);
+          return bookInfo;
+        }
+        return null;
+      }
+    } catch (e) {
+      console.error(`Failed to get metadata for book ${bookId}:`, e);
+      return null;
+    }
+  }
+
+  /**
+   * Saves a book's metadata.
+   */
+  public saveBookMetadata(bookId: number, metadata: BookMetadata): void {
+    const storageKey = this.getStorageKey(bookId, 'metadata');
+    try {
+      uni.setStorageSync(storageKey, metadata);
+    } catch (e) {
+      console.error(`Failed to save metadata for book ${bookId}:`, e);
+    }
+  }
+
+  /**
+   * Gets a book's reader-specific metadata (progress, audio state, etc.).
+   */
+  public getReaderMetadata(bookId: number): ReaderMetadata {
+    const storageKey = this.getStorageKey(bookId, 'readerMetadata');
+    try {
+      const readerMetadata = uni.getStorageSync(storageKey) as ReaderMetadata;
+      if (readerMetadata) {
+        return readerMetadata;
+      } else {
+        // Create, save, and return default reader metadata
+        const defaultData = this.createMockReaderMetadata(bookId);
+        this.saveReaderMetadata(bookId, defaultData);
+        return defaultData;
+      }
+    } catch (e) {
+      console.error(`Failed to get reader metadata for book ${bookId}:`, e);
+      return this.createMockReaderMetadata(bookId); // Return default on error
+    }
+  }
+
+  /**
+   * Saves a book's reader-specific metadata.
+   */
+  public saveReaderMetadata(bookId: number, readerMetadata: ReaderMetadata): void {
+    const storageKey = this.getStorageKey(bookId, 'readerMetadata');
+    try {
+      uni.setStorageSync(storageKey, readerMetadata);
+    } catch (e) {
+      console.error(`Failed to save reader metadata for book ${bookId}:`, e);
+    }
+  }
+
+  /**
+   * Gets a book's core content (sentences, versions, audio).
+   */
+  public getBookContentById(bookId: number): {
+    bookData: BookContent,
+    bookAllVersion: BookVersions,
+    BookAudio: BookAudio
+  } {
+    try {
+      const bookData = uni.getStorageSync(this.getStorageKey(bookId, 'data')) as BookContent;
+      const bookAllVersion = uni.getStorageSync(this.getStorageKey(bookId, 'versions')) as BookVersions;
+      const BookAudio = uni.getStorageSync(this.getStorageKey(bookId, 'audio')) as BookAudio;
+
+      if (bookData && bookAllVersion && BookAudio) {
+        return {
+          bookData,
+          bookAllVersion,
+          BookAudio
+        };
+      } else {
+        console.log(`No data found for book ${bookId}. Creating new mock data.`);
+        const mockData = this.createMockBookDetailData(bookId);
+        this.saveBookContent(bookId, mockData.bookData, mockData.bookAllVersion, mockData.BookAudio);
+        return mockData;
+      }
+    } catch (e) {
+      console.error('Failed to get book data from storage:', e);
+      return this.createMockBookDetailData(bookId);
+    }
+  }
+
+  /**
+   * Saves a book's core content (sentences, versions, audio).
+   */
+  public saveBookContent(bookId: number, bookData: BookContent, bookAllVersion: BookVersions, BookAudio: BookAudio): void {
+    try {
+      uni.setStorageSync(this.getStorageKey(bookId, 'data'), bookData);
+      uni.setStorageSync(this.getStorageKey(bookId, 'versions'), bookAllVersion);
+      uni.setStorageSync(this.getStorageKey(bookId, 'audio'), BookAudio);
+    } catch (e) {
+      console.error('Failed to save book data to storage:', e);
+    }
+  }
+
+  // --- Comprehensive Getters and Savers for the Whole Book ---
+
+  /**
+   * Retrieves and assembles all parts of a book into a single object.
+   * @param {number} bookId The ID of the book to retrieve.
+   * @returns {ComprehensiveBook | null} A comprehensive book object or null if not found.
+   */
+  public getBookByBookId(bookId: number): ComprehensiveBook | null {
+    const metadata = this.getBookMetadata(bookId);
+    if (!metadata) {
+      return null; // Book does not exist
+    }
+    const readerMetadata = this.getReaderMetadata(bookId);
+    const {
+      bookData,
+      bookAllVersion,
+      BookAudio
+    } = this.getBookContentById(bookId);
+
+    return {
+      metadata: metadata,
+      readerMetadata: readerMetadata,
+      content: bookData,
+      versions: bookAllVersion,
+      audio: BookAudio,
+    };
+  }
+
+  /**
+   * Saves all parts of a comprehensive book object.
+   * @param {ComprehensiveBook} bookObject The complete book object.
+   */
+  public saveBook(bookObject: ComprehensiveBook): void {
+    if (!bookObject?.metadata?.bookId) {
+      console.error("Invalid book object provided to saveBook.");
+      return;
+    }
+    const bookId = bookObject.metadata.bookId;
+
+    this.saveBookMetadata(bookId, bookObject.metadata);
+    this.saveReaderMetadata(bookId, bookObject.readerMetadata);
+    this.saveBookContent(bookId, bookObject.content, bookObject.versions, bookObject.audio);
+  }
+
+
+  // --- AI Task Management ---
+
+  public startAITask(bookId: number, taskName: string = "New AI Task"): void {
+    let {
+      bookData,
+      bookAllVersion,
+      BookAudio
+    } = this.getBookContentById(bookId);
+
+    const maxVersionId = bookAllVersion.allVersions.reduce((max, v) => Math.max(max, v.version), 0);
+    const newVersionId = maxVersionId + 1;
+
+    const currentVersion = bookAllVersion.allVersions.find(v => v.version === bookAllVersion.currentVersionId);
+    if (!currentVersion) {
+      console.error("Could not find current version to attach AI task.");
+      return;
+    }
+
+    const taskId = `ai_${Date.now()}`;
+    const newTask: AITask = {
+      id: taskId,
+      name: taskName,
+      progress: 0,
+      newVersionId: newVersionId,
+      parentVersionId: currentVersion.version, // Link task to its parent version
+    };
+
+    // Add task to the central running list
+    bookAllVersion.runningAiTasks.push(newTask);
+    // Update the parent version's counters
+    currentVersion.aiTasksInProgress++;
+    currentVersion.isAiTaskInProgress = true;
+    this.saveBookContent(bookId, bookData, bookAllVersion, BookAudio);
+
+    const intervalId = setInterval(() => {
+      let {
+        bookData: currentBookData,
+        bookAllVersion: currentBookAllVersion,
+        BookAudio: currentBookAudio
+      } = this.getBookContentById(bookId);
+
+      const taskIndex = currentBookAllVersion.runningAiTasks.findIndex(t => t.id === taskId);
+      if (taskIndex === -1) {
+        clearInterval(intervalId);
+        return;
+      }
+
+      let task = currentBookAllVersion.runningAiTasks[taskIndex];
+      task.progress += 1;
+
+      if (task.progress >= 100) {
+        clearInterval(intervalId);
+
+        const maxSentenceId = currentBookData.sentences.reduce((max, s) => Math.max(max, s.sentenceId), -1);
+        let sentenceIdCounter = maxSentenceId + 1;
+
+
+        const newContent =
+          `This is the newly generated content from "${task.name}" for version ${task.newVersionId}. `;
+        for (let i = 0; i < 5; i++) {
+          const sentenceId = sentenceIdCounter++;
+          currentBookData.sentences.push({
+            sentenceId: sentenceId,
+            version: task.newVersionId,
+            content: `${i + 1}. ${newContent}`
+          });
+          currentBookAudio.audioData.push({
+            sentenceId: sentenceId,
+            version: task.newVersionId,
+            audio: null
+          });
+        }
+
+        // Create the new version entry
+        currentBookAllVersion.allVersions.push({
+          version: task.newVersionId,
+          taskName: task.name,
+          versionCreatedAt: new Date().toLocaleString(),
+          isAiTaskInProgress: false,
+          aiTasksInProgress: 0
+        });
+
+        // Remove completed task from the running list
+        currentBookAllVersion.runningAiTasks.splice(taskIndex, 1);
+
+        // Update the parent version's task count
+        const taskParentVersion = currentBookAllVersion.allVersions.find(v => v.version === task.parentVersionId);
+        if (taskParentVersion) {
+          taskParentVersion.aiTasksInProgress--;
+          taskParentVersion.isAiTaskInProgress = taskParentVersion.aiTasksInProgress > 0;
+        }
+
+        currentBookAllVersion.currentVersionId = task.newVersionId;
+        this.saveBookContent(bookId, currentBookData, currentBookAllVersion, currentBookAudio);
+
+      } else {
+        this.saveBookContent(bookId, currentBookData, currentBookAllVersion, currentBookAudio);
+      }
+    }, 1000);
+  }
+
+  public cancelAITask(bookId: number, taskKey: string): void {
+    let {
+      bookData,
+      bookAllVersion,
+      BookAudio
+    } = this.getBookContentById(bookId);
+    const [taskName, versionStr] = taskKey.split('_v');
+    const versionId = parseInt(versionStr, 10);
+
+    const taskIndex = bookAllVersion.runningAiTasks.findIndex(
+      t => t.name === taskName && t.newVersionId === versionId
+    );
+
+    if (taskIndex !== -1) {
+      const task = bookAllVersion.runningAiTasks[taskIndex];
+
+      // Find the parent version to update its count
+      const parentVersion = bookAllVersion.allVersions.find(v => v.version === task.parentVersionId);
+
+      // Remove the task from the running list
+      bookAllVersion.runningAiTasks.splice(taskIndex, 1);
+
+      if (parentVersion) {
+        parentVersion.aiTasksInProgress--;
+        parentVersion.isAiTaskInProgress = parentVersion.aiTasksInProgress > 0;
+      }
+
+      this.saveBookContent(bookId, bookData, bookAllVersion, BookAudio);
+    }
+  }
+
+  public accelerateAITask(bookId: number, taskKey: string): void {
+    let {
+      bookData,
+      bookAllVersion,
+      BookAudio
+    } = this.getBookContentById(bookId);
+    const [taskName, versionStr] = taskKey.split('_v');
+    const versionId = parseInt(versionStr, 10);
+
+    const task = bookAllVersion.runningAiTasks.find(
+      t => t.name === taskName && t.newVersionId === versionId
+    );
+
+    if (task) {
+      task.progress = Math.min(98, task.progress + 50);
+      this.saveBookContent(bookId, bookData, bookAllVersion, BookAudio);
+    }
+  }
+}
+
+export default new BookCacheService();

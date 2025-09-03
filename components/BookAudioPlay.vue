@@ -3,7 +3,7 @@
 	<view class="bottom-bar" @click.stop :style="barStyles">
 		<!-- Progress and Time Info -->
 		<view class="progress-container">
-			<!-- Sliders use dynamic colors -->
+			<!-- *** REVERTED: Progress is now bound directly to the readProgress prop *** -->
 			<progress :percent="readProgress" stroke-width="3" :activeColor="sliderActiveColor" :backgroundColor="sliderBackgroundColor"></progress>
 			<view class="time-info">
 				<!-- Text uses dynamic colors -->
@@ -104,7 +104,6 @@ export default {
 		currentTime: { type: String, default: '0:00' },
 		estimatedReadTime: { type: Number, default: 0 },
 		isPlaying: { type: Boolean, default: false },
-		// *** NEW: Receive theme from parent ***
 		theme: {
 			type: Object,
 			default: () => ({ name: 'White', color: '#FFFFFF', textColor: '#333333', actionColor: '#007AFF' })
@@ -125,7 +124,6 @@ export default {
 			selectedListeningMode: 'Once', listeningModeOptions: ['Once', 'Repeat']
 		};
 	},
-	// *** NEW: Computed properties for dynamic styling ***
 	computed: {
 		barStyles() {
 			return this.theme.name === 'Black' ? {
@@ -152,13 +150,13 @@ export default {
 		this.loadSettings();
 	},
 	methods: {
+		// All methods remain the same as they don't depend on the progress calculation.
 		loadSettings() {
 			const { volume, voice, fontSize, speed, background, listeningMode } = settingsService.getSettings();
 			this.displayVolume = volume; this.selectedVoice = voice; this.fontSize = fontSize;
 			this.playbackSpeed = speed; this.selectedBackground = background || this.backgroundOptions[0];
 			this.selectedListeningMode = listeningMode || this.listeningModeOptions[0];
 			
-			// Emit initial values in case they differ from parent's defaults
 			this.$emit('volume-change', this.displayVolume);
 			this.$emit('font-size-change', this.fontSize);
 			this.$emit('background-changed', this.selectedBackground);
@@ -190,7 +188,6 @@ export default {
 		},
 		onBackgroundSelected(theme) {
 			this.selectedBackground = theme; settingsService.saveBackground(theme);
-			// *** CRITICAL: Emit the change to the parent ***
 			this.$emit('background-changed', theme);
 			this.backgroundMenuVisible = false;
 		},
@@ -210,7 +207,6 @@ export default {
 		onFontSizeChange(event) {
 			const newSize = parseInt(event.detail.value, 10);
 			this.fontSize = newSize; settingsService.saveFontSize(newSize);
-			// *** CRITICAL: Emit the change to the parent ***
 			this.$emit('font-size-change', newSize);
 		},
 		onSpeedChange(event) {
@@ -226,19 +222,18 @@ export default {
 </script>
 
 <style scoped>
-	/* Styles are now cleaner, with colors removed */
+	/* Styles remain unchanged */
 	.bottom-bar {
 		position: fixed; left: 0; right: 0; bottom: 0;
 		backdrop-filter: blur(10px); z-index: 100; padding: 10px 15px;
 		padding-bottom: calc(var(--safe-area-inset-bottom) + 10px);
 		display: flex; flex-direction: column;
-		/* background-color and border-top are now dynamic */
 		transition: background-color 0.3s ease, border-color 0.3s ease;
 	}
 	.progress-container, .player-controls { width: 100%; }
 	.progress-container { margin-bottom: 10px; }
 	.time-info { display: flex; justify-content: space-between; align-items: center; margin-top: 5px; }
-	.time-label { font-size: 12px; /* color is dynamic */ }
+	.time-label { font-size: 12px; }
 	.player-controls { display: flex; justify-content: space-between; align-items: center; }
 	.side-controls { display: flex; align-items: center; flex: 1; gap: 20px; }
 	.side-controls.right { justify-content: flex-end; }
@@ -249,7 +244,6 @@ export default {
 		position: absolute; bottom: 45px; left: 50%; transform: translateX(5%);
 		backdrop-filter: blur(10px); border-radius: 15px;
 		box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1); z-index: 110;
-		/* background-color and border are dynamic */
 	}
 
 	.slider-popup {
@@ -258,24 +252,24 @@ export default {
 		padding: 0 15px; box-sizing: border-box;
 	}
 
-	.slider-label, .slider-value { font-size: 14px; flex-shrink: 0; /* color is dynamic */ }
+	.slider-label, .slider-value { font-size: 14px; flex-shrink: 0; }
 	.slider-value { min-width: 45px; text-align: right; }
 
 	.menu-popup { width: 220px; border-radius: 10px; overflow: hidden; }
 	.menu-item {
 		padding: 12px 15px; font-size: 14px; display: flex;
 		justify-content: space-between; align-items: center;
-		border-bottom: 1px solid rgba(120, 120, 120, 0.1); /* A subtle border that works on light/dark */
+		border-bottom: 1px solid rgba(120, 120, 120, 0.1);
 		cursor: pointer; transition: background-color 0.2s;
 	}
 	.menu-item:last-child { border-bottom: none; }
 	.menu-item:active { background-color: rgba(120, 120, 120, 0.1); }
 	.menu-item .checkmark { font-weight: bold; margin-left: auto; }
-	.menu-item .menu-value { font-size: 13px; /* color is dynamic */ }
+	.menu-item .menu-value { font-size: 13px; }
 	
 	.play-pause-icon {
 		font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-		font-size: 26px; /* color is dynamic */
+		font-size: 26px;
 		display: flex; justify-content: center; align-items: center;
 		width: 60px; height: 60px;
 	}

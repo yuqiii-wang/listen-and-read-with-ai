@@ -1,0 +1,264 @@
+import bookCacheService from './BookCacheService';
+
+// Assuming uni-app types are available, otherwise you might need to declare the 'uni' object.
+// For example, create a file `uni.d.ts` with:
+// declare const uni: any;
+
+// --- Interface Definitions ---
+
+/**
+ * The structure for the user's reading history, derived from BookCacheService.
+ */
+interface ReadingHistory {
+  totalReadingTime: string; // Formatted as "Xh Ym"
+  thisMonthReadingTime: string; // Formatted as "Xh Ym"
+  totalReadBooks: number;
+  totalFinishedBooks: number;
+  favoriteBooks: number[]; // Array of book IDs
+}
+
+/**
+ * Represents a single instance of spending AI budget.
+ */
+interface ConsumptionHistory {
+  aiTask: string;
+  bookId: number;
+  version: number; // The new version ID being generated
+  spentAmount: number;
+  spentAt: number; // Unix timestamp
+}
+
+/**
+ * Represents a single top-up transaction.
+ */
+interface TopUpHistory {
+  topUpAmount: number;
+  topUpAt: number; // Unix timestamp
+}
+
+/**
+ * The main user profile structure.
+ */
+export interface UserProfile {
+  uuid: string;
+  username: string;
+  email: string;
+  aiBudget: number;
+  boundWeChatAccount: string | null;
+  boundAppleAccount: string | null;
+  boundGoogleAccount: string | null;
+  readHistory: ReadingHistory;
+  consumptionHistory: ConsumptionHistory[];
+  topUpHistory: TopUpHistory[];
+}
+
+
+/**
+ * Manages the user's profile data, including reading history derived
+ * from the BookCacheService.
+ */
+class UserProfileCacheService {
+
+  private readonly storageKey = 'user_profile';
+
+  /**
+   * Retrieves the user profile from storage. If it doesn't exist,
+   * creates a new one. It always recalculates reading history from
+   * BookCacheService to ensure the data is up-to-date.
+   * @returns {UserProfile} The user's profile.
+   */
+  public getUserProfile(): UserProfile {
+    let profile: UserProfile;
+    try {
+      const storedProfile = uni.getStorageSync(this.storageKey);
+      if (storedProfile) {
+        profile = storedProfile;
+      } else {
+        console.log("No user profile found, creating a new one.");
+        profile = this.createInitialProfile();
+        this.saveUserProfile(profile);
+      }
+    } catch (e) {
+      console.error('Failed to get user profile from storage:', e);
+      profile = this.createInitialProfile();
+    }
+
+    // Always recalculate stats from BookCacheService to ensure data is fresh
+    profile.readHistory = this.calculateReadingHistory(profile);
+
+    return profile;
+  }
+
+  /**
+   * Saves the provided user profile object to persistent storage.
+   * @param {UserProfile} profile The user profile to save.
+   */
+  public saveUserProfile(profile: UserProfile): void {
+    try {
+      uni.setStorageSync(this.storageKey, profile);
+    } catch (e) {
+      console.error('Failed to save user profile to storage:', e);
+    }
+  }
+
+  /**
+   * Creates a default user profile with mock data.
+   * @returns {UserProfile} A new user profile object.
+   */
+  private createInitialProfile(): UserProfile {
+    return {
+      uuid: `user_${Date.now()}_${Math.random()}`,
+      username: "Guest User",
+      email: "guest@example.com",
+      aiBudget: 1000,
+      boundWeChatAccount: null,
+      boundAppleAccount: null,
+      boundGoogleAccount: null,
+      readHistory: {
+        totalReadingTime: "0h 0m",
+        thisMonthReadingTime: "0h 0m",
+        totalReadBooks: 0,
+        totalFinishedBooks: 0,
+        favoriteBooks: [],
+      },
+      consumptionHistory: [],
+      topUpHistory: [],
+    };
+  }
+
+  /**
+   * Calculates the user's reading history based on data from BookCacheService.
+   * This function provides the core logic for deriving statistics.
+   * @param {UserProfile} profile The current user profile to get existing favorite books.
+   * @returns {ReadingHistory} The recalculated reading history.
+   */
+  private calculateReadingHistory(profile: UserProfile): ReadingHistory {
+    const libraryBookIds = bookCacheService.getLibraryBooks();
+    let totalReadSeconds = 0;
+    let finishedBooksCount = 0;
+
+    for (const bookId of libraryBookIds) {
+      const readerMeta = bookCacheService.getReaderMetadata(bookId);
+      const book = bookCacheService.getBookByBookId(bookId);
+
+      if (readerMeta) {
+        totalReadSeconds += readerMeta.readTime;
+      }
+
+      if (book && readerMeta) {
+        const currentVersionId = book.versions.currentVersionId;
+        const sentencesForVersion = book.content.sentences.filter(
+          s => s.version === currentVersionId
+        );
+
+        // A book is considered finished if the last read sentence ID is the
+        // ID of the very last sentence in the current version.
+        if (sentencesForVersion.length > 0) {
+          const lastSentenceId = sentencesForVersion[sentencesForVersion.length - 1].sentenceId;
+          if (readerMeta.lastReadSentenceId >= lastSentenceId) {
+            finishedBooksCount++;
+          }
+        }
+      }
+    }
+
+    const formatTime = (seconds: number): string => {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      return `${h}h ${m}m`;
+    };
+
+    // NOTE: The 'thisMonthReadingTime' calculation is a simplification.
+    // The current BookCacheService does not store timestamped reading sessions,
+    // so we cannot accurately determine how much reading was done in the current month.
+    // For this implementation, it mirrors the total reading time.
+    const totalReadingTime = formatTime(totalReadSeconds);
+    const thisMonthReadingTime = totalReadingTime;
+
+    return {
+      totalReadingTime,
+      thisMonthReadingTime,
+      totalReadBooks: libraryBookIds.length,
+      totalFinishedBooks: finishedBooksCount,
+      // Preserve the list of favorite books from the existing profile
+      favoriteBooks: profile.readHistory?.favoriteBooks || [],
+    };
+  }
+
+  // --- Profile Modification Methods ---
+
+  /**
+   * Adds a top-up record to the user's history and increases their AI budget.
+   * @param {number} amount The amount to top up.
+   */
+  public addTopUp(amount: number): void {
+    if (amount <= 0) return;
+    const profile = this.getUserProfile();
+    profile.aiBudget += amount;
+    profile.topUpHistory.push({
+      topUpAmount: amount,
+      topUpAt: Date.now(),
+    });
+    this.saveUserProfile(profile);
+  }
+
+  /**
+   * Logs a consumption event, reducing the AI budget.
+   * @param {Omit<ConsumptionHistory, 'spentAt'>} consumptionDetails Details of the consumption.
+   * @returns {boolean} True if the budget was sufficient, false otherwise.
+   */
+  public logConsumption(consumptionDetails: Omit < ConsumptionHistory, 'spentAt' > ): boolean {
+    const profile = this.getUserProfile();
+    if (profile.aiBudget < consumptionDetails.spentAmount) {
+      console.warn("Insufficient AI budget for this action.");
+      return false;
+    }
+    profile.aiBudget -= consumptionDetails.spentAmount;
+    profile.consumptionHistory.push({
+      ...consumptionDetails,
+      spentAt: Date.now(),
+    });
+    this.saveUserProfile(profile);
+    return true;
+  }
+
+  /**
+   * Adds a book to the user's list of favorite books.
+   * @param {number} bookId The ID of the book to add.
+   */
+  public addFavoriteBook(bookId: number): void {
+    const profile = this.getUserProfile();
+    if (!profile.readHistory.favoriteBooks.includes(bookId)) {
+      profile.readHistory.favoriteBooks.push(bookId);
+      this.saveUserProfile(profile);
+    }
+  }
+
+  /**
+   * Removes a book from the user's list of favorite books.
+   * @param {number} bookId The ID of the book to remove.
+   */
+  public removeFavoriteBook(bookId: number): void {
+    const profile = this.getUserProfile();
+    const index = profile.readHistory.favoriteBooks.indexOf(bookId);
+    if (index > -1) {
+      profile.readHistory.favoriteBooks.splice(index, 1);
+      this.saveUserProfile(profile);
+    }
+  }
+
+  /**
+   * Updates basic user information like username or email.
+   * @param {Partial<Pick<UserProfile, 'username' | 'email'>>} updates
+   *        An object with the fields to update.
+   */
+  public updateUserInfo(updates: Partial < Pick < UserProfile, 'username' | 'email' >> ): void {
+    const profile = this.getUserProfile();
+    const updatedProfile = { ...profile,
+      ...updates
+    };
+    this.saveUserProfile(updatedProfile);
+  }
+}
+
+export default new UserProfileCacheService();

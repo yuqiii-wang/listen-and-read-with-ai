@@ -1,231 +1,272 @@
 <template>
-	<view class="history-versions-container">
-		<!-- 1. History Versions Menu Option -->
-		<view class="menu-option" @click="toggleHistory">
-			<text>History Versions</text>
-			<uni-icons :type="isHistoryExpanded ? 'up' : 'down'" size="20" color="#666"></uni-icons>
-		</view>
-
-		<!-- 2. Collapsible list of history items -->
-		<view v-if="isHistoryExpanded" class="history-list" @touchmove.stop.prevent="dragMove" @touchend="dragEnd" @touchcancel="dragEnd">
-			<view v-if="book.history && book.history.length > 0">
-				<view v-for="(item, index) in book.history" :key="item.id" :class="['history-item', { 'drop-target': index === dropTargetIndex }]" :data-index="index" :style="{ opacity: isDragging && draggedItemIndex === index ? 0.3 : 1 }">
-					<!-- Item Info -->
-					<text class="history-item-info">{{ item.timestamp }} - {{ item.taskName }}</text>
-
-					<!-- Action Icons Container -->
-					<view class="history-item-actions">
-						<!-- Drag Handle -->
-						<view class="drag-handle" @touchstart.stop="dragStart($event, item, index)" @longpress.stop="dragStart($event, item, index)">
-							<uni-icons type="bars" size="22" color="#999"></uni-icons>
-						</view>
-						<!-- Delete Icon -->
-						<uni-icons type="trash" size="20" color="#e43d33" @click="confirmDeleteHistory(item)"></uni-icons>
+	<scroll-view scroll-y class="history-versions-container" :style="containerStyle">
+		<view class="details-content">
+			<!-- 1. AI Task Section (Progress for multiple tasks) -->
+			<view class="ai-section" v-if="hasActiveAITasks">
+				<text class="section-label" :style="sectionLabelStyle">AI Task(s) In Progress:</text>
+				<view v-for="task in activeAiTasks" :key="task.key" class="ai-in-progress-view">
+					<text class="ai-task-name" :style="textStyle">{{ formatTaskKey(task.key) }}</text>
+					<view class="progress-container">
+						<progress :percent="task.progress" stroke-width="6" activeColor="#18BC37" backgroundColor="#EFEFEF" class="ai-progress-bar"></progress>
+						<text class="ai-progress-label">{{ task.progress }}%</text>
+					</view>
+					<view class="action-buttons">
+						<button class="cancel-btn" @click="$emit('cancel-ai-task', task.key)">Cancel</button>
+						<button class="accelerate-btn" @click="$emit('accelerate-ai-task', task.key)">Accelerate</button>
 					</view>
 				</view>
 			</view>
-			<view v-else>
-				<text class="no-history-message">No history available.</text>
-			</view>
 
-			<!-- Draggable Clone Item - This element follows the user's finger -->
-			<view v-if="isDragging && draggedItem" class="history-item-clone" :style="{ top: clonePosition.y + 'px', left: clonePosition.x + 'px' }">
-				<text class="history-item-info">{{ draggedItem.timestamp }} - {{ draggedItem.taskName }}</text>
-				<view class="history-item-actions">
-					<uni-icons type="bars" size="22" color="#999"></uni-icons>
-					<uni-icons type="trash" size="20" color="#e43d33"></uni-icons>
+			<!-- 2. History Versions Section -->
+			<view class="history-section">
+				<text class="section-label">History Versions:</text>
+				<view class="history-list" @touchmove="handleTouchMove" @touchend="dragEnd" @touchcancel="dragEnd">
+					<view v-if="sortedHistory.length > 0">
+						<view v-for="(item, index) in sortedHistory" :key="item.id" :class="['history-item', { 'drop-target': index === dropTargetIndex }]" :data-index="index" :style="[itemStyle, isDragging && draggedItemIndex === index ? { opacity: 0.3 } : {}]">
+							<view class="current-version-indicator" @click="switchVersion(item)">
+								<uni-icons v-if="item.id === currentVersionId" type="checkmarkempty" size="22" color="#007aff"></uni-icons>
+								<uni-icons v-else type="checkmarkempty" size="22" color="#c0c0c0"></uni-icons>
+							</view>
+							<text class="history-item-info">
+								<strong v-if="newVersionIds.includes(item.id)" class="new-version-label">NEW!</strong>
+								{{ item.timestamp }} - {{ item.taskName }} (v{{ item.id }})
+							</text>
+							<view class="history-item-actions">
+								<view class="drag-handle" @touchstart.stop="dragStart($event, item, index)">
+									<uni-icons type="bars" size="22" color="#999"></uni-icons>
+								</view>
+								<uni-icons type="trash" size="20" color="#e43d33" @click="confirmDeleteHistory(item)"></uni-icons>
+							</view>
+						</view>
+					</view>
+					<view v-else>
+						<text class="no-history-message">No history available.</text>
+					</view>
+					<view v-if="isDragging && draggedItem" class="history-item-clone" :style="{ top: clonePosition.y + 'px', left: clonePosition.x + 'px' }">
+						<text class="history-item-info">{{ draggedItem.timestamp }} - {{ draggedItem.taskName }} (v{{ draggedItem.id }})</text>
+					</view>
 				</view>
 			</view>
-
 		</view>
-	</view>
+	</scroll-view>
 </template>
 
 <script>
 	export default {
 		name: 'BookHistoryVersions',
 		props: {
-			book: {
-				type: Object,
-				required: true
-			}
+			allVersions: { type: Array, required: true },
+			bookId: { type: [String, Number], required: true },
+			currentVersionId: { type: Number, required: true },
+			justCompletedAIVersions: { type: Array, default: () => [] },
+			show: { type: Boolean, default: false },
+			theme: { type: Object, required: true },
 		},
+		emits: ['switch-version', 'delete-version', 'cancel-ai-task', 'accelerate-ai-task', 'reset-just-completed-versions'],
 		data() {
 			return {
-				isHistoryExpanded: false,
-				// Drag and Drop State
+				newVersionIds: [],
 				isDragging: false,
 				draggedItem: null,
 				draggedItemIndex: -1,
 				dropTargetIndex: -1,
-				itemRects: [], // To store dimensions of each history item
-				clonePosition: {
-					x: 0,
-					y: 0
-				},
-				touchOffset: {
-					x: 0,
-					y: 0
-				}
+				itemRects: [],
+				clonePosition: { x: 0, y: 0 },
+				touchOffset: { x: 0, y: 0 }
 			};
 		},
-		methods: {
-			toggleHistory() {
-				this.isHistoryExpanded = !this.isHistoryExpanded;
-				// When opening, get the positions of the items
-				if (this.isHistoryExpanded) {
-					this.$nextTick(() => {
-						this.cacheItemRects();
-					});
-				}
+		computed: {
+			sortedHistory() {
+				if (!this.allVersions) return [];
+				const mapped = this.allVersions.map(v => ({
+					id: v.version,
+					taskName: v.taskName,
+					timestamp: v.versionCreatedAt
+				}));
+				return mapped.reverse();
 			},
-
-			// --- Drag and Drop Methods ---
-
-			cacheItemRects() {
-				const query = uni.createSelectorQuery().in(this);
-				query.selectAll('.history-item').boundingClientRect(data => {
-					this.itemRects = data;
+			activeAiTasks() {
+				if (!this.allVersions) return [];
+				return this.allVersions.flatMap(version =>
+					(version.aiTasksInProgress || []).map(task => ({
+						...task,
+						key: `${task.name}_v${task.newVersionId}`
+					}))
+				);
+			},
+			hasActiveAITasks() {
+				return this.activeAiTasks.length > 0;
+			},
+			containerStyle() {
+				const isDark = this.theme.name === 'Black';
+				return {
+					backgroundColor: isDark ? '#252525' : '#FFFFFF',
+				};
+			},
+			textStyle() {
+				return {
+					color: this.theme.textColor,
+				};
+			},
+			itemStyle() {
+				const isDark = this.theme.name === 'Black';
+				const backgroundColor = isDark ? 'rgba(255, 255, 255, 0.05)' : '#f9f9f9';
+				const borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : '#e0e0e0';
+				return {
+					color: this.theme.textColor,
+					backgroundColor: backgroundColor,
+					borderColor: borderColor,
+				};
+			},
+			sectionLabelStyle() {
+				return {
+					color: this.theme.textColor,
+					opacity: 0.8,
+				};
+			}
+		},
+		watch: {
+			justCompletedAIVersions: {
+				handler(newVersions) {
+					if (newVersions && newVersions.length > 0) {
+						uni.showToast({
+							title: 'AI task completed!',
+							icon: 'success'
+						});
+						const currentIds = new Set([...this.newVersionIds, ...newVersions]);
+						this.newVersionIds = Array.from(currentIds);
+						
+						this.$emit('reset-just-completed-versions');
+					}
+				},
+				immediate: true
+			}
+		},
+		created() {
+			if (this.justCompletedAIVersions.length > 0) {
+				this.newVersionIds = [...this.justCompletedAIVersions];
+			}
+		},
+		unmounted() {
+			this.newVersionIds = [];
+		},
+		methods: {
+			formatTaskKey(taskKey) {
+				return taskKey.replace(/_/g, ' ');
+			},
+			switchVersion(historyItem) {
+				if (historyItem.id === this.currentVersionId) return;
+				this.$emit('switch-version', historyItem.id);
+			},
+			dragStart(event, item, index) {
+				if (this.isDragging) return;
+				uni.createSelectorQuery().in(this).selectAll('.history-item').boundingClientRect(rects => {
+					if (!rects || !rects[index]) return;
+					this.itemRects = rects;
+					this.isDragging = true;
+					this.draggedItem = item;
+					this.draggedItemIndex = index;
+					const touch = event.touches[0];
+					const startRect = this.itemRects[index];
+					this.touchOffset = { x: touch.clientX - startRect.left, y: touch.clientY - startRect.top };
+					this.clonePosition = { x: startRect.left, y: startRect.top };
 				}).exec();
 			},
-
-			dragStart(event, item, index) {
-				// Prevent starting a new drag if one is already in progress
-				if (this.isDragging) return;
-
-				// Cache item positions right before drag starts
-				this.cacheItemRects();
-
-				this.isDragging = true;
-				this.draggedItem = item;
-				this.draggedItemIndex = index;
-
-				const touch = event.touches[0] || event.changedTouches[0];
-				const startRect = this.itemRects[index];
-
-				// Calculate offset from top-left corner of the item
-				this.touchOffset.x = touch.clientX - startRect.left;
-				this.touchOffset.y = touch.clientY - startRect.top;
-
-				// Set initial clone position
-				this.clonePosition.x = touch.clientX - this.touchOffset.x;
-				this.clonePosition.y = touch.clientY - this.touchOffset.y;
+			handleTouchMove(event) {
+				if (this.isDragging) {
+					event.preventDefault();
+					event.stopPropagation();
+					this.dragMove(event);
+				}
 			},
-
 			dragMove(event) {
 				if (!this.isDragging) return;
-
-				const touch = event.touches[0] || event.changedTouches[0];
+				const touch = event.touches[0];
 				this.clonePosition.x = touch.clientX - this.touchOffset.x;
 				this.clonePosition.y = touch.clientY - this.touchOffset.y;
-
-				// Collision Detection
 				const draggedRect = {
-					left: this.clonePosition.x,
-					top: this.clonePosition.y,
-					right: this.clonePosition.x + this.itemRects[this.draggedItemIndex].width,
-					bottom: this.clonePosition.y + this.itemRects[this.draggedItemIndex].height,
-					width: this.itemRects[this.draggedItemIndex].width,
-					height: this.itemRects[this.draggedItemIndex].height,
+					left: this.clonePosition.x, top: this.clonePosition.y,
+					right: this.clonePosition.x + (this.itemRects[this.draggedItemIndex]?.width || 0),
+					bottom: this.clonePosition.y + (this.itemRects[this.draggedItemIndex]?.height || 0),
+					width: this.itemRects[this.draggedItemIndex]?.width || 0,
+					height: this.itemRects[this.draggedItemIndex]?.height || 0,
 				};
-
-				let foundTarget = -1;
-				for (let i = 0; i < this.itemRects.length; i++) {
-					// Don't compare with itself
-					if (i === this.draggedItemIndex) continue;
-
-					const staticRect = this.itemRects[i];
-					const overlap = this.calculateOverlap(draggedRect, staticRect);
-
-					if (overlap >= 0.65) {
-						foundTarget = i;
-						break;
-					}
-				}
-				this.dropTargetIndex = foundTarget;
+				this.dropTargetIndex = this.itemRects.findIndex((rect, i) =>
+					i !== this.draggedItemIndex && this.calculateOverlap(draggedRect, rect) >= 0.5
+				);
 			},
-
 			dragEnd() {
 				if (!this.isDragging) return;
-
-				// If a valid drop target was highlighted
 				if (this.dropTargetIndex !== -1) {
 					const sourceItem = this.draggedItem;
-					const targetItem = this.book.history[this.dropTargetIndex];
-					this.confirmMerge(sourceItem, targetItem);
-				}
+					const targetItem = this.sortedHistory[this.dropTargetIndex];
+					if (sourceItem.id === targetItem.id) return;
 
-				// Reset all state
+					// MODIFIED: Use the 'bookId' prop
+					uni.navigateTo({
+						url: `/pages/library/LibraryBookMerge?id=${this.bookId}&sourceVersionId=${sourceItem.id}&targetVersionId=${targetItem.id}&mergeAction=rewrite&mergeStartSentencePos=1`
+					});
+				}
 				this.isDragging = false;
 				this.draggedItem = null;
 				this.draggedItemIndex = -1;
 				this.dropTargetIndex = -1;
 			},
-
-			calculateOverlap(rect1, rect2) {
-				const x_overlap = Math.max(0, Math.min(rect1.right, rect2.right) - Math.max(rect1.left, rect2.left));
-				const y_overlap = Math.max(0, Math.min(rect1.bottom, rect2.bottom) - Math.max(rect1.top, rect2.top));
+			calculateOverlap(r1, r2) {
+				const x_overlap = Math.max(0, Math.min(r1.right, r2.right) - Math.max(r1.left, r2.left));
+				const y_overlap = Math.max(0, Math.min(r1.bottom, r2.bottom) - Math.max(r1.top, r2.top));
 				const overlapArea = x_overlap * y_overlap;
-				// Calculate overlap percentage relative to the smaller of the two items
-				const smallerArea = Math.min(rect1.width * rect1.height, rect2.width * rect2.height);
+				const smallerArea = Math.min(r1.width * r1.height, r2.width * r2.height);
 				return smallerArea > 0 ? overlapArea / smallerArea : 0;
 			},
-
-			confirmMerge(sourceItem, targetItem) {
-				uni.showModal({
-					title: 'Confirm Merge',
-					content: `Are you sure you want to merge "${sourceItem.taskName}" into "${targetItem.taskName}"? This action cannot be undone.`,
-					success: (res) => {
-						if (res.confirm) {
-							console.log("Merge confirmed:", sourceItem, "->", targetItem);
-							// Here you would emit an event to the parent to handle the actual data merge
-							// this.$emit('history-merged', { sourceId: sourceItem.id, targetId: targetItem.id });
-							uni.showToast({
-								title: 'Items merged!',
-								icon: 'success'
-							});
-						}
-					}
-				});
-			},
-
-
-			// --- Existing Methods ---
-
 			confirmDeleteHistory(historyItem) {
+				if (historyItem.id === this.currentVersionId) {
+					uni.showToast({ title: 'Cannot delete active version.', icon: 'none' });
+					return;
+				}
 				uni.showModal({
 					title: 'Delete History',
-					content: `Delete the history item "${historyItem.taskName}" from ${historyItem.timestamp}?`,
+					content: `Delete "${historyItem.taskName}"?`,
 					success: (res) => {
 						if (res.confirm) {
-							this.deleteHistoryItem(historyItem.id);
+							this.$emit('delete-version', historyItem.id);
 						}
 					}
 				});
 			},
-
-			deleteHistoryItem(historyId) {
-				const updatedHistory = this.book.history.filter(item => item.id !== historyId);
-				this.$emit('history-updated', updatedHistory);
-
-				uni.showToast({
-					title: 'History item deleted',
-					icon: 'success'
-				});
-			}
 		}
 	}
 </script>
 
-<style>
-	.history-versions-container { width: 100%; }
-	.menu-option { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; font-size: 15px; color: #333; cursor: pointer; border-bottom: 1px solid #eee; }
-	.history-list { display: flex; flex-direction: column; gap: 8px; padding-left: 10px; margin-top: 10px; position: relative; }
-	.history-item { display: flex; justify-content: space-between; align-items: center; font-size: 14px; color: #555; padding: 8px; border: 2px solid transparent; border-radius: 4px; background-color: #fff; }
-	.history-item-info { flex: 1; }
-	.history-item-actions { display: flex; align-items: center; gap: 10px; }
-	.drag-handle { cursor: grab; padding: 0 5px; }
-	.no-history-message { font-size: 14px; color: #888; }
-	.history-item-clone { position: fixed; z-index: 1000; background-color: #f0f0f0; box-shadow: 0 4px 10px rgba(0,0,0,0.2); pointer-events: none; opacity: 0.95; padding: 8px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 14px; color: #555; width: 100%; max-width: 300px; /* Adjust width as needed */ }
-	.drop-target { border: 2px solid #007aff !important; font-weight: bold; }
+<style scoped>
+	.history-versions-container {
+		width: 100%;
+		max-height: 50vh;
+	}
+	
+	.details-content { display: flex; flex-direction: column; gap: 15px; padding: 10px 15px; }
+	.section-label { display: block; font-size: 14px; margin-bottom: 8px; font-weight: 500; }
+	
+	.ai-section { padding-bottom: 10px; border-bottom: 1px solid #f0f0f0; }
+	.ai-in-progress-view { margin-bottom: 15px; }
+	.ai-task-name { font-size: 14px; margin-bottom: 8px; }
+	.progress-container { display: flex; align-items: center; gap: 10px; }
+	.ai-progress-bar { flex: 1; }
+	.ai-progress-label { font-size: 12px; }
+	.action-buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
+	.action-buttons button { font-size: 14px; padding: 4px 12px; margin: 0; line-height: 1.5; }
+	.cancel-btn { background-color: #f0f0f0 !important; color: #333 !important; }
+	.accelerate-btn { background-color: #007aff !important; color: white !important; }
+
+	.history-list { display: flex; flex-direction: column; gap: 8px; position: relative; padding-right: 5px; }
+	.history-item { display: flex; align-items: center; font-size: 14px; padding: 10px 8px; border: 1px solid; border-radius: 6px; }
+	.current-version-indicator { width: 30px; height: 30px; flex-shrink: 0; cursor: pointer; display: flex; align-items: center; justify-content: center; margin-right: 5px; }
+	.history-item-info { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	.history-item-actions { display: flex; align-items: center; gap: 15px; padding-left: 10px; }
+	.drag-handle { cursor: grab; }
+	.no-history-message { font-size: 14px; padding: 10px 0; }
+	.new-version-label { color: #18BC37; font-weight: bold; margin-right: 5px; }
+
+	.history-item-clone { position: fixed; z-index: 1000; box-shadow: 0 5px 15px rgba(0,0,0,0.2); pointer-events: none; opacity: 0.95; padding: 10px 15px; border-radius: 6px; font-size: 14px; }
+	.drop-target { border-color: #007aff !important; font-weight: bold; background-color: #e6f2ff; }
 </style>

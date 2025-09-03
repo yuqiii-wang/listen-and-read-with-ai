@@ -1,240 +1,185 @@
 <template>
-	<!-- Manage Library Section -->
-	<view class="library-management-section">
-		<uni-list v-if="libraryBooks.length > 0">
-			<template v-for="(book, index) in libraryBooks" :key="book.marketId">
-				<uni-list-item>
-					<!-- ... (unchanged list item body and footer) ... -->
+	<view class="history-versions-container" :style="pageStyle">
+		<uni-list :border="false">
+			<view v-for="version in allVersions" :key="version.version" class="version-list-item-wrapper">
+				<uni-list-item :customStyle="itemStyle(version.version)">
+					<!-- List Item Body: Clickable area to switch version -->
 					<template v-slot:body>
-						<view class="book-item-body">
-							<image :src="book.cover" class="book-cover" mode="aspectFill"></image>
-							<view class="book-info">
-								<text class="book-title">{{ book.title }}</text>
-								<view v-if="book.AIisInProgress" class="ai-status">
-									<text class="ai-in-progress-text">AI In Progress</text>
-								</view>
+						<view class="version-item-body" @click="handleSwitchVersion(version.version)">
+							<text class="version-label" :style="versionLabelStyle(version.version)">
+								v{{ version.version }}
+							</text>
+							<view class="version-details">
+								<text class="version-info-text" :style="titleStyle">
+									Created: {{ formatTimestamp(version.timestamp) }}
+								</text>
+								<text v-if="version.source" class="version-info-text" :style="sourceStyle">
+									Source: {{ version.source }}
+								</text>
 							</view>
 						</view>
 					</template>
+					
 					<template v-slot:footer>
-						<view class="book-item-footer">
-							<view class="expand-icon" @click="toggleDetails(book)">
-								<uni-icons :type="book.isExpanded ? 'up' : 'down'" size="22" color="#666"></uni-icons>
+						<view class="version-item-footer">
+							<view class="active-version-icon" @click="handleSwitchVersion(version.version)">
+								<uni-icons 
+									type="checkmark-filled" 
+									size="24" 
+									:color="isActiveVersion(version.version) ? '#28a745' : theme.textColor"
+								></uni-icons>
 							</view>
-							<view class="delete-button" @click="confirmDelete(book)">
+							<view class="delete-version-icon" @click="confirmDeleteVersion(version.version)">
 								<uni-icons type="trash" size="22" color="#e43d33"></uni-icons>
 							</view>
 						</view>
 					</template>
 				</uni-list-item>
 
-				<!-- Expanded Details Section -->
-				<view v-if="book.isExpanded" class="details-section">
-					<!-- 1. AI Progress View (shows only when a task is in progress) -->
-					<view v-if="book.AIisInProgress" class="ai-in-progress-view">
-						<text class="ai-task-label">AI Task: {{ book.AITask }}</text>
-						<view class="progress-container">
-							<progress :percent="book.AIProgress" stroke-width="6" activeColor="#18BC37" backgroundColor="#EFEFEF" class="ai-progress-bar"></progress>
-							<text class="ai-progress-label">{{ book.AIProgress }}%</text>
-						</view>
-						<view class="action-buttons">
-							<button class="cancel-btn" @click="confirmCancelAITask(book)">Cancel</button>
-							<button class="accelerate-btn" @click="confirmAccelerateAITask(book)">Accelerate</button>
+				<!-- AI Task Progress Section -->
+				<view v-if="version.aiTasksInProgress && version.aiTasksInProgress.length > 0">
+					<view v-for="task in version.aiTasksInProgress" :key="task.key" class="ai-task-item">
+						<text class="ai-task-info" :style="titleStyle">{{ task.description }} ({{ task.progress }}%)</text>
+						<view class="ai-task-actions">
+							<button size="mini" @click="$emit('cancel-ai-task', task.key)">Cancel</button>
+							<button size="mini" type="primary" @click="$emit('accelerate-ai-task', task.key)">Accelerate</button>
 						</view>
 					</view>
-
-					<!-- 2. Start AI Task Menu (shows only when NO task is in progress) -->
-					<view v-else>
-						<view class="menu-option" @click="toggleAITasks(book)">
-							<text>Start an AI Task</text>
-							<uni-icons :type="book.isAITasksExpanded ? 'up' : 'down'" size="20" color="#666"></uni-icons>
-						</view>
-						<view v-if="book.isAITasksExpanded" class="ai-task-list">
-							<view v-for="task in book.availableAITasks" :key="task" class="ai-task-link" @click="confirmStartAITask(book, task)">
-								{{ task }}
-							</view>
-						</view>
-					</view>
-
-					<!-- 3. History Component (ALWAYS shows when expanded) -->
-					<book-history-versions :book="book" @history-updated="handleHistoryUpdate(book, $event)"></book-history-versions>
-
 				</view>
-			</template>
+			</view>
 		</uni-list>
-		<view v-else class="empty-library-message">
-			<text>No books in your library.</text>
-		</view>
 	</view>
 </template>
 
 <script>
-	import settingsService from '@/services/settingsService';
-	// Import the new component
-	import BookHistoryVersions from '@/components/BookHistoryVersions.vue';
-
 	export default {
-		// Register the new component
-		components: {
-			BookHistoryVersions
+		name: "BookHistoryVersions",
+		props: {
+			bookId: { type: [String, Number], required: true },
+			currentVersionId: { type: Number, required: true },
+			theme: { type: Object, required: true },
 		},
-		data() {
-			return {
-				libraryBooks: []
-			};
-		},
-		onShow() {
-			this.loadLibraryBooks();
+		emits: [
+			'delete-version', 
+			'switch-version', 
+			'cancel-ai-task', 
+			'accelerate-ai-task'
+		],
+		computed: {
+			pageStyle() {
+				return { backgroundColor: this.theme.color };
+			},
+			titleStyle() {
+				return { color: this.theme.textColor };
+			},
+			sourceStyle() {
+				const color = this.theme.name === 'Black' ? '#bb86fc' : '#007aff';
+				return { color: color, fontStyle: 'italic' };
+			}
 		},
 		methods: {
-			loadLibraryBooks() {
-				this.libraryBooks = settingsService.getLibraryBooks().map(book => ({
-					...book,
-					isExpanded: book.isExpanded || false,
-					isAITasksExpanded: book.isAITasksExpanded || false,
-					AIisInProgress: book.AIisInProgress || false,
-					AIProgress: book.AIProgress || 0,
-					AITask: book.AITask || '',
-					availableAITasks: book.availableAITasks || ['Summarize', 'Extract Keywords', 'Rewrite to Simple'],
-					history: book.history || [{
-						id: 1,
-						timestamp: '2025-08-15 11:45',
-						taskName: 'Summarize'
-					}, {
-						id: 2,
-						timestamp: '2025-08-18 16:20',
-						taskName: 'Extract Keywords'
-					}, ]
-				}));
+			itemStyle(versionId) {
+				const isActive = this.isActiveVersion(versionId);
+				const borderColor = this.theme.name === 'Black' ? 'rgba(255, 255, 255, 0.1)' : '#eee';
+				const backgroundColor = isActive 
+					? (this.theme.name === 'Black' ? 'rgba(255, 255, 255, 0.08)' : '#f0f8ff')
+					: this.theme.color;
+
+				return {
+					backgroundColor: backgroundColor,
+					borderBottom: `1px solid ${borderColor}`
+				};
 			},
-			updateBookState(updatedBook) {
-				settingsService.updateBookInLibrary(updatedBook);
-				const index = this.libraryBooks.findIndex(b => b.marketId === updatedBook.marketId);
-				if (index !== -1) {
-					this.libraryBooks.splice(index, 1, updatedBook);
+			versionLabelStyle(versionId) {
+				return {
+					color: this.isActiveVersion(versionId) ? '#28a745' : this.theme.textColor,
+					fontWeight: this.isActiveVersion(versionId) ? 'bold' : 'normal'
+				};
+			},
+			isActiveVersion(versionId) {
+				return this.currentVersionId === versionId;
+			},
+			handleSwitchVersion(versionId) {
+				if (!this.isActiveVersion(versionId)) {
+					this.$emit('switch-version', versionId);
 				}
 			},
-			toggleDetails(book) {
-				book.isExpanded = !book.isExpanded;
-				if (!book.isExpanded) {
-					book.isAITasksExpanded = false;
+			confirmDeleteVersion(versionId) {
+				if (this.isActiveVersion(versionId)) {
+					uni.showToast({
+						title: 'Cannot delete the active version.',
+						icon: 'none'
+					});
+					return;
 				}
-				this.updateBookState(book);
-			},
-			toggleAITasks(book) {
-				book.isAITasksExpanded = !book.isAITasksExpanded;
-				this.updateBookState(book);
-			},
-			handleHistoryUpdate(book, updatedHistory) {
-				const updatedBook = { ...book,
-					history: updatedHistory
-				};
-				this.updateBookState(updatedBook);
-			},
-			confirmStartAITask(book, task) {
 				uni.showModal({
-					title: 'Confirm AI Task',
-					content: `Start the '${task}' task for "${book.title}"?`,
+					title: 'Confirm Delete',
+					content: `Are you sure you want to delete version ${versionId}? This action cannot be undone.`,
 					success: (res) => {
 						if (res.confirm) {
-							this.startAITask(book, task);
+							this.$emit('delete-version', versionId);
 						}
 					}
 				});
 			},
-			startAITask(book, task) {
-				const updatedBook = { ...book,
-					AIisInProgress: true,
-					AITask: task,
-					AIProgress: 0,
-					isAITasksExpanded: false
-				};
-				this.updateBookState(updatedBook);
-				uni.showToast({
-					title: `'${task}' started`,
-					icon: 'success'
-				});
-			},
-			confirmDelete(book) {
-				uni.showModal({
-					title: 'Confirm',
-					content: `Remove "${book.title}" from your library?`,
-					success: (res) => {
-						if (res.confirm) {
-							this.deleteBook(book.marketId);
-						}
-					}
-				});
-			},
-			deleteBook(marketId) {
-				settingsService.removeBookFromLibrary(marketId);
-				this.loadLibraryBooks();
-				uni.showToast({
-					title: 'Book removed',
-					icon: 'success'
-				});
-			},
-			confirmCancelAITask(book) {
-				uni.showModal({
-					title: 'Confirm Cancellation',
-					content: 'Are you sure you want to cancel the AI task?',
-					success: (res) => {
-						if (res.confirm) {
-							const updatedBook = { ...book,
-								AIisInProgress: false,
-								isExpanded: false
-							};
-							this.updateBookState(updatedBook);
-							uni.showToast({
-								title: 'AI task cancelled',
-								icon: 'none'
-							});
-						}
-					}
-				});
-			},
-			confirmAccelerateAITask(book) {
-				uni.showModal({
-					title: 'Accelerate AI Task',
-					content: 'This will reduce the remaining time by approx. 50% and consume an extra 200 AI budget credits.\n\nDo you want to proceed?',
-					success: (res) => {
-						if (res.confirm) {
-							uni.showToast({
-								title: 'AI task accelerated',
-								icon: 'none'
-							});
-						}
-					}
-				});
-			},
+			formatTimestamp(timestamp) {
+				if (!timestamp) return 'N/A';
+				const date = new Date(timestamp);
+				return date.toLocaleString();
+			}
 		}
 	}
 </script>
 
-<style>
-	/* All general styles remain here */
-	.library-management-section { margin-top: 20px; }
-	.book-item-body { display: flex; flex-direction: row; align-items: center; width: 100%; }
-	.book-cover { width: 50px; height: 70px; margin-right: 15px; border-radius: 4px; }
-	.book-info { flex: 1; display: flex; flex-direction: column; }
-	.book-title { font-size: 16px; font-weight: 500; }
-	.ai-status { margin-top: 5px; }
-	.ai-in-progress-text { font-size: 12px; font-style: italic; color: #007aff; }
-	.book-item-footer { display: flex; align-items: center; }
-	.expand-icon { padding: 0 10px; }
-	.delete-button { display: flex; align-items: center; justify-content: center; padding: 0 10px; cursor: pointer; }
-	.empty-library-message { padding: 20px; text-align: center; color: #888; }
-	.details-section { padding: 10px 15px; background-color: #f9f9f9; border-bottom: 1px solid #eee; display: flex; flex-direction: column; gap: 15px; }
-	.ai-task-label { display: block; font-size: 14px; color: #555; margin-bottom: 8px; }
-	.progress-container { display: flex; align-items: center; gap: 10px; }
-	.ai-progress-bar { flex: 1; }
-	.ai-progress-label { font-size: 12px; color: #333; }
-	.action-buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px; }
-	.action-buttons button { font-size: 14px; padding: 4px 12px; margin: 0; line-height: 1.5; }
-	.cancel-btn { background-color: #f0f0f0 !important; color: #333 !important; }
-	.accelerate-btn { background-color: #007aff !important; color: white !important; }
-	.ai-in-progress-view { padding-bottom: 5px; }
-	.menu-option { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; font-size: 15px; color: #333; cursor: pointer; border-bottom: 1px solid #eee; }
-	.ai-task-list { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin-top: 10px; padding-left: 10px; }
-	.ai-task-link { font-size: 15px; color: #007aff; cursor: pointer; padding: 4px 0; }
+<style scoped>
+	.history-versions-container {
+		/* ADDED: Makes the list scrollable if it's too long */
+		max-height: 40vh;
+		overflow-y: auto;
+	}
+	.version-list-item-wrapper {
+		/* Wraps each list item and its potential AI tasks */
+	}
+	.version-item-body {
+		display: flex;
+		flex-direction: row;
+		align-items: center;
+		width: 100%;
+		cursor: pointer; /* Indicates the entire body is clickable */
+	}
+	.version-label {
+		font-size: 16px;
+		width: 50px; /* Fixed width for alignment */
+	}
+	.version-details {
+		display: flex;
+		flex-direction: column;
+	}
+	.version-info-text {
+		font-size: 12px;
+		color: #666;
+	}
+	.version-item-footer {
+		display: flex;
+		align-items: center;
+	}
+	.active-version-icon, .delete-version-icon {
+		padding: 0 8px;
+		cursor: pointer;
+	}
+	.ai-task-item {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 8px 15px;
+		background-color: rgba(0, 122, 255, 0.05);
+		border-bottom: 1px solid #eee;
+	}
+	.ai-task-info {
+		font-size: 12px;
+	}
+	.ai-task-actions {
+		display: flex;
+		gap: 10px;
+	}
 </style>

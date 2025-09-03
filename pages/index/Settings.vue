@@ -37,7 +37,7 @@
 				</template>
 			</uni-list-item>
 			
-			<!-- NEW: Background Theme Selection -->
+			<!-- Background Theme Selection -->
 			<uni-list-item title="Background Theme" showArrow clickable @click="openBackgroundActionSheet">
 				<template v-slot:footer>
 					<view class="setting-control">
@@ -47,7 +47,7 @@
 				</template>
 			</uni-list-item>
 
-			<!-- NEW: Listening Mode Selection -->
+			<!-- Listening Mode Selection -->
 			<uni-list-item title="Listening Mode" showArrow clickable @click="openListeningModeActionSheet">
 				<template v-slot:footer>
 					<text class="selected-value">{{ selectedListeningMode }}</text>
@@ -59,7 +59,8 @@
 </template>
 
 <script>
-	import settingsService from '@/services/settingsService';
+	// --- ALIGNED: Using the correct settingsCacheService ---
+	import settingsCacheService from '@/services/settingsCacheService';
 
 	export default {
 		data() {
@@ -69,12 +70,13 @@
 				fontSize: 16,
 				playbackSpeed: 1.0,
 				voiceOptions: ['Female Voice', 'Male Voice', 'News Voice', 'Child Voice'],
-				// New properties
+				// This object is for the UI, but we'll save only the name string.
 				selectedBackground: { name: 'White', color: '#FFFFFF' },
+				// These options map the theme names (as stored in the service) to their UI colors.
 				backgroundOptions: [
-					{ name: 'White', color: '#FFFFFF' },
-					{ name: 'Black', color: '#000000' },
-					{ name: 'Light Brown', color: '#F5DEB3' }
+					{ name: 'White', color: '#F8F9FA' },
+					{ name: 'Black', color: '#121212' },
+					{ name: 'Light Brown', color: '#FAF3E0' }
 				],
 				selectedListeningMode: 'Once',
 				listeningModeOptions: ['Once', 'Repeat'],
@@ -85,22 +87,28 @@
 			this.loadSettings();
 		},
 		methods: {
+			// --- ALIGNED: Loading settings from settingsCacheService and mapping to data properties ---
 			loadSettings() {
-				const settings = settingsService.getSettings();
+				const settings = settingsCacheService.getSettings();
 				this.volume = settings.volume;
 				this.voice = settings.voice;
 				this.fontSize = settings.fontSize;
 				this.playbackSpeed = settings.speed;
-				this.selectedBackground = settings.background; // Load background
-				this.selectedListeningMode = settings.listeningMode; // Load listening mode
+
+				// ALIGNED: Load the theme name (string) and find the corresponding object for the UI.
+				const themeName = settings.theme;
+				this.selectedBackground = this.backgroundOptions.find(opt => opt.name === themeName) || this.backgroundOptions[0];
+				
+				// ALIGNED: Load the listening mode from the 'SpeakingPerson' key.
+				this.selectedListeningMode = settings.SpeakingPerson;
 			},
 			onVolumeChange(e) {
 				this.volume = e.detail.value;
-				settingsService.saveVolume(this.volume);
+				settingsCacheService.saveVolume(this.volume);
 			},
 			onFontSizeChange(e) {
 				this.fontSize = e.detail.value;
-				settingsService.saveFontSize(this.fontSize);
+				settingsCacheService.saveFontSize(this.fontSize);
 			},
 			onSpeedChange(e) {
 				const sliderValue = parseFloat(e.detail.value);
@@ -111,7 +119,7 @@
 
 				if (this.playbackSpeed !== closestSpeed) {
 					this.playbackSpeed = closestSpeed;
-					settingsService.saveSpeed(this.playbackSpeed);
+					settingsCacheService.saveSpeed(this.playbackSpeed);
 				}
 			},
 			openVoiceActionSheet() {
@@ -119,28 +127,30 @@
 					itemList: this.voiceOptions,
 					success: (res) => {
 						this.voice = this.voiceOptions[res.tapIndex];
-						settingsService.saveVoice(this.voice);
+						settingsCacheService.saveVoice(this.voice);
 					}
 				});
 			},
-			// New method for background theme
+			// --- ALIGNED: Saving the theme using saveTheme with only the name (string) ---
 			openBackgroundActionSheet() {
 				const themeNames = this.backgroundOptions.map(theme => theme.name);
 				uni.showActionSheet({
 					itemList: themeNames,
 					success: (res) => {
+						// Update the UI with the full object
 						this.selectedBackground = this.backgroundOptions[res.tapIndex];
-						settingsService.saveBackground(this.selectedBackground);
+						// Save only the name string, as per the data model
+						settingsCacheService.saveTheme(this.selectedBackground.name);
 					}
 				});
 			},
-			// New method for listening mode
+			// --- ALIGNED: Saving the listening mode using saveSpeakingPerson ---
 			openListeningModeActionSheet() {
 				uni.showActionSheet({
 					itemList: this.listeningModeOptions,
 					success: (res) => {
 						this.selectedListeningMode = this.listeningModeOptions[res.tapIndex];
-						settingsService.saveListeningMode(this.selectedListeningMode);
+						settingsCacheService.saveSpeakingPerson(this.selectedListeningMode);
 					}
 				});
 			}
@@ -171,13 +181,11 @@
 		color: #888;
 	}
 
-	/* New style for color indicator */
 	.color-indicator {
 		width: 20px;
 		height: 20px;
 		border-radius: 50%;
 		border: 1px solid #e0e0e0;
-		/* Add a small margin to separate it from the text */
 		margin-right: 5px; 
 	}
 </style>

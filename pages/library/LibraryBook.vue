@@ -1,27 +1,41 @@
 <template>
-	<!-- Template remains largely the same, but note the changes to <book-audio-play> -->
-	<view class="reader-container" @click="handleContainerClick" :style="readerStyles">
-		<!-- Top Bar -->
-		<uni-transition mode-class="fade" :show="barsVisible || isAiActionPending">
-			<view v-if="barsVisible || isAiActionPending" class="top-bar" @click.stop :style="{ backgroundColor: topBarBackgroundColor }">
-				<view class="top-bar-content">
-					<uni-icons type="back" size="24" :color="theme.textColor" @click.stop="goBack"></uni-icons>
-					<text class="action-btn" :style="{ color: theme.actionColor }" @click.stop="handleTopBarAction">{{ topBarActionText }}</text>
-				</view>
-			</view>
-		</uni-transition>
+	<!-- Main container with dynamic styles from the theme service -->
+	<view class="reader-container" @click="handleContainerClick" :style="{ backgroundColor: themeStyles.backgroundColor }">
 
+		<!-- BookAICheckBar, now passes the full theme object -->
+		<BookAICheckBar
+			:show="isTopBarVisible"
+			:theme="themeStyles"
+			:top-bar-action-text="topBarActionText"
+			:total-version-num="totalVersions"
+			:bookId="bookId"
+			:is-ai-action-pending="isAiActionPending"
+			:selected-text="selectedText"
+			:allVersions="allVersions"
+			:justCompletedAIVersions="justCompletedAIVersions"
+			:current-version-id="currentVersionId"
+			@cancel-ai-action="cancelAiAction"
+			@ai-action-committed="commitAiAction"
+			@task-started="refreshBookData"
+			@insert-content="handleInsertContent"
+			@delete-version="handleDeleteVersion"
+			@switch-version="handleSwitchVersion"
+			@reset-just-completed-versions="handleResetCompletedVersions"
+			@cancel-ai-task="handleCancelAiTask"
+			@accelerate-ai-task="handleAccelerateAiTask"
+		/>
+
+		<!-- Main Scrollable Content -->
 		<scroll-view
 			scroll-y
 			class="content-scroll"
 			ref="scrollView"
 			:scroll-top="scrollTop"
 			@scroll="handleScroll"
-			@touchstart="handleTouchStart"
-			@touchend="handleTouchEnd"
 		>
 			<view class="book-content">
-				<text class="book-title-header" :style="{ color: theme.textColor }">{{ bookTitle }}</text>
+				<!-- Title and text color are now bound to the theme service -->
+				<text class="book-title-header" :style="{ color: themeStyles.primaryTextColor }">{{ bookTitle }}</text>
 				<text
 					class="book-text"
 					selectable="true"
@@ -36,14 +50,13 @@
 
 		<!-- Bottom Audio Play Bar -->
 		<uni-transition mode-class="fade" :show="barsVisible">
-			<!-- *** MODIFIED: Pass theme prop and listen for change events *** -->
 			<book-audio-play
 				v-if="barsVisible"
 				:read-progress="readProgress"
 				:current-time="currentTime"
 				:estimated-read-time="estimatedReadTime"
 				:is-playing="isPlaying"
-				:theme="theme"
+				:theme="themeStyles"
 				@font-size-change="handleFontSizeChange"
 				@background-changed="handleBackgroundChange"
 				@toggle-play="togglePlay"
@@ -52,62 +65,76 @@
 			></book-audio-play>
 		</uni-transition>
 
-		<!-- AI Info Sidebar -->
-		<sidebar-info
-			v-if="isSidebarOpen"
-			:mode="sidebarMode"
-			:user-input-text="committedSelectedText"
-			@close="closeAiSidebar"
-			@insert-content="handleInsertContent"
-		></sidebar-info>
 	</view>
 </template>
 
 <script>
 	import BookAudioPlay from '@/components/BookAudioPlay';
-	import SidebarInfo from '@/components/SidebarInfo';
-	import settingsService from '@/services/settingsService';
+	import BookAICheckBar from '@/components/BookAICheckBar';
+	// --- ALIGNED: Using the correct service imports ---
+	import settingsCacheService from '@/services/settingsCacheService';
+	import bookCacheService from '@/services/BookCacheService';
 
 	export default {
-		// ... components, data, computed properties are unchanged ...
-		components: { BookAudioPlay, SidebarInfo },
+		components: { BookAICheckBar, BookAudioPlay },
 		data() {
 			return {
-				// --- Existing state ---
+				// --- ALIGNED: Central state object for the current book ---
+				comprehensiveBook: null,
+				
+				// --- Book Data State (derived from comprehensiveBook) ---
 				bookId: null,
 				bookTitle: 'Loading...',
-				bookContent: 'This is the beginning of the great book... '.repeat(300),
+				justCompletedAIVersions: [],
+				currentVersionId: 1,
+				allVersions: [],
+				currentBookSentences: [],
+
+				// --- UI State ---
 				barsVisible: true,
+				scrollTop: 0,
+				currentScrollTop: 0,
+				scrollViewHeight: 0,
+
+				// --- Reader State ---
 				isPlaying: false,
-				sidebarMode: 'default',
+				readProgress: 0,
+				estimatedReadTime: 0,
+				
+				// --- AI Interaction State ---
 				selectedText: '',
-				committedSelectedText: '',
-				isSidebarOpen: false,
 				isAiActionPending: false,
 				dummyProp: 0,
 				clearSelectionTrigger: 0,
-				readProgress: 0,
-				estimatedReadTime: 0,
-				totalWords: 0,
-				scrollViewHeight: 0,
-				volume: 80,
-				scrollTop: 0,
-				currentScrollTop: 0,
-				touchStartY: 0,
-				readingTimer: null,
-				totalReadingTimeSeconds: 0,
 
-				// --- Settings state ---
+				// --- ALIGNED: Settings state now uses a detailed theme object ---
 				fontSize: 16,
-				theme: {
-					name: 'White',
-					color: '#FFFFFF',
-					textColor: '#333333',
-					actionColor: '#007AFF'
-				},
+				themeStyles: {}, // Will hold the full ThemeStyles object
+				
+				taskUpdateInterval: null,
 			};
 		},
 		computed: {
+			isTopBarVisible() {
+				return this.barsVisible || this.isAiActionPending;
+			},
+			totalVersions() {
+				return this.allVersions ? this.allVersions.length : 0;
+			},
+			topBarActionText() {
+				return this.isAiActionPending ? 'Ask AI' : 'AI Info';
+			},
+			bookContent() {
+				if (!this.currentBookSentences || this.currentBookSentences.length === 0) {
+					return 'Loading book content...';
+				}
+				// Sort sentences by ID and join their content
+				const content = this.currentBookSentences
+					.sort((a, b) => a.sentenceId - b.sentenceId)
+					.map(item => item.content)
+					.join(' ');
+				return content || 'This version is empty.';
+			},
 			currentTime() {
 				if (this.estimatedReadTime === 0) return '0:00';
 				const totalSeconds = this.estimatedReadTime * 60;
@@ -116,36 +143,23 @@
 				const seconds = currentSeconds % 60;
 				return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
 			},
-			topBarActionText() {
-				return this.isAiActionPending ? 'Ask AI' : 'AI Info';
-			},
-			readerStyles() {
-				return { backgroundColor: this.theme.color };
-			},
+			// --- ALIGNED: Style computed properties now use the themeStyles object ---
 			bookTextStyle() {
 				return {
 					fontSize: `${this.fontSize}px`,
-					color: this.theme.textColor,
+					color: this.themeStyles.primaryTextColor,
 				};
 			},
-			topBarBackgroundColor() {
-				if (this.theme.name === 'Black') {
-					return 'rgba(40, 40, 40, 0.95)';
-				}
-				return 'rgba(255, 255, 255, 0.9)';
-			}
 		},
 		onLoad(options) {
-			this.bookId = options.id;
-			this.bookTitle = decodeURIComponent(options.title);
+			this.bookId = parseInt(options.id, 10);
 			this.loadAndApplySettings();
-			this.loadReadingPosition();
-			this.calculateReadTime();
-			this.startReadingTimer();
-			setTimeout(() => { this.barsVisible = false; }, 3000);
+			this.loadBookContent();
 		},
 		onShow() {
 			this.loadAndApplySettings();
+			// Re-load book content in case of external changes (e.g., AI task completion)
+			this.loadBookContent();
 		},
 		onReady() {
 			uni.createSelectorQuery().in(this).select('.content-scroll').boundingClientRect(data => {
@@ -153,152 +167,199 @@
 			}).exec();
 		},
 		onUnload() {
-			this.saveReadingPosition();
-			this.stopAndSaveReadingTime();
+			this.saveReadingProgress();
+			if (this.taskUpdateInterval) {
+				clearInterval(this.taskUpdateInterval);
+			}
 		},
 		methods: {
-			// *** NEW: Centralized method to apply a theme object ***
-			applyTheme(themeSetting) {
-				let textColor = '#333333';
-				let actionColor = '#007AFF';
-
-				if (themeSetting.name === 'Black') {
-					textColor = '#e0e0e0'; // Light grey for dark background
-					actionColor = '#4daaff'; // A lighter blue for better visibility
-				} else if (themeSetting.name === 'Light Brown') {
-					textColor = '#5c4033'; // Dark brown text for a sepia look
-				}
-				
-				// Set the component's reactive theme property, which triggers updates
-				this.theme = { ...themeSetting, textColor, actionColor };
-			},
-			
-			// *** MODIFIED: Uses the new applyTheme helper ***
-			loadAndApplySettings() {
-				const settings = settingsService.getSettings();
-				this.fontSize = settings.fontSize || 16;
-				const themeSetting = settings.background || { name: 'White', color: '#FFFFFF' };
-				this.applyTheme(themeSetting); // Use the helper
-			},
-
-			// *** NEW: Event handler for font size changes from child ***
-			handleFontSizeChange(newSize) {
-				this.fontSize = newSize;
-			},
-			
-			// *** NEW: Event handler for theme changes from child ***
-			handleBackgroundChange(newTheme) {
-				this.applyTheme(newTheme); // Use the helper to update the entire view
-			},
-
+			// --- Event Handlers ---
 			handleContainerClick() {
-				if (this.isSidebarOpen) return;
 				if (this.isAiActionPending) {
 					this.cancelAiAction();
-					this.clearSelectionTrigger++;
-				} else {
-					this.barsVisible = !this.barsVisible;
+					return;
 				}
+				this.barsVisible = !this.barsVisible;
+			},
+			handleResetCompletedVersions() {
+				this.justCompletedAIVersions = [];
 			},
 			
-			// ... other methods remain unchanged ...
-			startReadingTimer() {
-				this.totalReadingTimeSeconds = settingsService.getReadingTime();
-				if (this.readingTimer) clearInterval(this.readingTimer);
-				this.readingTimer = setInterval(() => { this.totalReadingTimeSeconds++; }, 1000);
-			},
-			stopAndSaveReadingTime() {
-				clearInterval(this.readingTimer);
-				settingsService.updateReadingTime(this.totalReadingTimeSeconds);
-			},
-			handleTouchStart(e) { this.touchStartY = e.touches[0].clientY; },
-			handleTouchEnd(e) {
-				const touchEndY = e.changedTouches[0].clientY;
-				const deltaY = touchEndY - this.touchStartY;
-				const swipeThreshold = 50;
-				if (Math.abs(deltaY) > swipeThreshold && !this.barsVisible) {
-					if (deltaY < 0) this.scrollTop = this.currentScrollTop + this.scrollViewHeight;
-					else this.scrollTop = this.currentScrollTop - this.scrollViewHeight;
-				}
-			},
-			handleScroll(event) {
-				this.currentScrollTop = event.detail.scrollTop;
-				const { scrollHeight } = event.detail;
-				const scrollableDistance = scrollHeight - this.scrollViewHeight;
-				if (scrollableDistance <= 0) { this.readProgress = 0; return; }
-				const progress = (this.currentScrollTop / scrollableDistance) * 100;
-				this.readProgress = Math.min(100, Math.max(0, progress));
-			},
-			saveReadingPosition() {
-				if (this.bookId) uni.setStorageSync(`reading_pos_${this.bookId}`, this.currentScrollTop);
-			},
-			loadReadingPosition() {
-				if (this.bookId) {
-					const pos = uni.getStorageSync(`reading_pos_${this.bookId}`);
-					if (pos) { this.scrollTop = pos; this.currentScrollTop = pos; }
-				}
-			},
-			activateAiAction() {
-				this.isAiActionPending = true;
-				this.committedSelectedText = '';
-			},
+			// --- AI Text Selection ---
+			activateAiAction() { this.isAiActionPending = true; },
 			updateSelectedText(text) { this.selectedText = text; },
 			cancelAiAction() {
 				if (this.isAiActionPending) {
 					this.isAiActionPending = false;
 					this.selectedText = '';
+					this.clearSelectionTrigger++;
 				}
 			},
-			handleTopBarAction() {
-				if (this.isAiActionPending) {
-					if (this.selectedText.length > 0) {
-						this.committedSelectedText = this.selectedText;
-						this.sidebarMode = 'userInput';
-						this.isSidebarOpen = true;
-						this.clearSelectionTrigger++;
-						this.isAiActionPending = false;
-					} else {
-						uni.showToast({ title: 'Please select some text first', icon: 'none' });
-					}
-				} else {
-					this.sidebarMode = 'default';
-					this.isSidebarOpen = true;
+			commitAiAction() {
+				this.isAiActionPending = false;
+				this.selectedText = '';
+				this.clearSelectionTrigger++;
+			},
+
+			// --- Event Handlers from Child Components ---
+			refreshBookData() { this.loadBookContent(); },
+			handleInsertContent(payload) { /* Future Logic */ },
+			// --- ALIGNED: AI Task management now uses bookCacheService ---
+			handleCancelAiTask(taskKey) {
+				bookCacheService.cancelAITask(this.bookId, taskKey);
+				uni.showToast({ title: `Cancelling ${taskKey.replace('_', ' ')}`, icon: 'none' });
+				this.refreshBookData();
+			},
+			handleAccelerateAiTask(taskKey) {
+				bookCacheService.accelerateAITask(this.bookId, taskKey);
+				uni.showToast({ title: 'Accelerate request sent!', icon: 'none' });
+			},
+			
+			// --- ALIGNED: Data Management using BookCacheService ---
+			loadBookContent() {
+				if (!this.bookId) return;
+
+				const oldVersionIds = this.allVersions.map(v => v.version);
+				
+				// Fetch the entire comprehensive book object
+				const book = bookCacheService.getBookByBookId(this.bookId);
+				if (!book) {
+					this.bookTitle = "Error: Book not found.";
+					return;
+				}
+				this.comprehensiveBook = book;
+				
+				// Populate component state from the comprehensive object
+				this.allVersions = book.versions.allVersions;
+				this.currentVersionId = book.versions.currentVersionId;
+
+				// Detect newly completed AI task versions
+				const newVersionIds = this.allVersions.map(v => v.version);
+				const completedVersionIds = newVersionIds.filter(id => !oldVersionIds.includes(id));
+				if (completedVersionIds.length > 0 && oldVersionIds.length > 0) {
+					this.justCompletedAIVersions = completedVersionIds;
+				}
+
+				this.updateCurrentView();
+				this.loadReadingProgress();
+
+				// Check for running AI tasks and set up an interval to refresh data
+				const hasActiveTasks = book.versions.runningAiTasks && book.versions.runningAiTasks.length > 0;
+				if (hasActiveTasks && !this.taskUpdateInterval) {
+					this.taskUpdateInterval = setInterval(() => this.loadBookContent(), 2000);
+				} else if (!hasActiveTasks && this.taskUpdateInterval) {
+					clearInterval(this.taskUpdateInterval);
+					this.taskUpdateInterval = null;
 				}
 			},
-			goBack() { uni.navigateBack(); },
+			updateCurrentView() {
+				if (!this.comprehensiveBook) return;
+				
+				// Filter sentences for the current version
+				this.currentBookSentences = this.comprehensiveBook.content.sentences.filter(item => item.version === this.currentVersionId);
+				
+				const currentVersionInfo = this.allVersions.find(v => v.version === this.currentVersionId);
+				// Use custom title if available, otherwise fall back to version task name or metadata title
+				this.bookTitle = this.comprehensiveBook.readerMetadata.customTitle || (currentVersionInfo ? currentVersionInfo.taskName : this.comprehensiveBook.metadata.title);
+				
+				this.calculateReadTime();
+			},
+			saveCurrentBookState() {
+				if (this.comprehensiveBook) {
+					bookCacheService.saveBook(this.comprehensiveBook);
+				}
+			},
+
+			// --- Version Management ---
+			handleDeleteVersion(versionIdToDelete) {
+				if (versionIdToDelete === this.currentVersionId) {
+					uni.showToast({ title: 'Cannot delete the active version.', icon: 'none' });
+					return;
+				}
+				// ALIGNED: Modify the central comprehensiveBook object
+				this.comprehensiveBook.versions.allVersions = this.comprehensiveBook.versions.allVersions.filter(v => v.version !== versionIdToDelete);
+				this.comprehensiveBook.content.sentences = this.comprehensiveBook.content.sentences.filter(s => s.version !== versionIdToDelete);
+				
+				this.allVersions = this.comprehensiveBook.versions.allVersions; // Update local computed property
+				
+				this.saveCurrentBookState();
+				uni.showToast({ title: 'Version deleted', icon: 'success' });
+			},
+			handleSwitchVersion(versionId) {
+				if (this.currentVersionId === versionId) return;
+
+				// ALIGNED: Update the central comprehensiveBook object
+				this.currentVersionId = versionId;
+				this.comprehensiveBook.versions.currentVersionId = versionId;
+
+				this.updateCurrentView();
+				this.saveCurrentBookState();
+				this.loadReadingProgress(); // Load position for the new version
+				uni.showToast({ title: `Switched to: ${this.bookTitle}`, icon: 'none' });
+			},
+
+			// --- ALIGNED: Settings & UI using SettingsCacheService ---
+			loadAndApplySettings() {
+				const settings = settingsCacheService.getSettings();
+				this.fontSize = settings.fontSize || 16;
+				// Get the detailed theme object from the service
+				this.themeStyles = settingsCacheService.getThemeContent(settings.theme);
+			},
+			handleBackgroundChange(newThemeName) {
+				this.themeStyles = settingsCacheService.getThemeContent(newThemeName);
+				// Optionally save the new theme preference
+				settingsCacheService.saveTheme(newThemeName);
+			},
+			handleFontSizeChange(newSize) {
+				this.fontSize = newSize;
+				settingsCacheService.saveFontSize(newSize);
+			},
+			
+			// --- Reading Progress ---
+			handleScroll(event) {
+				this.currentScrollTop = event.detail.scrollTop;
+				const { scrollHeight } = event.detail;
+				const scrollableDistance = scrollHeight - this.scrollViewHeight;
+				if (scrollableDistance <= 0) { this.readProgress = 0; return; }
+				this.readProgress = Math.min(100, Math.max(0, (this.currentScrollTop / scrollableDistance) * 100));
+			},
+			saveReadingProgress() { 
+				// ALIGNED: Save progress back to the readerMetadata object
+				if (this.comprehensiveBook) {
+					// A real implementation would convert scrollTop to the nearest sentenceId.
+					// For now, we'll store it in a custom property or reuse an existing one if suitable.
+					// Let's use readTime to store scroll position for simplicity in this example.
+					this.comprehensiveBook.readerMetadata.readTime = this.currentScrollTop;
+					this.saveCurrentBookState();
+				}
+			},
+			loadReadingProgress() {
+				if (this.comprehensiveBook) {
+					// Using readTime as a placeholder for the last scroll position
+					const pos = this.comprehensiveBook.readerMetadata.readTime || 0;
+					// Use nextTick to ensure the DOM is ready before setting scrollTop
+					this.$nextTick(() => { this.scrollTop = pos; this.currentScrollTop = pos; });
+				}
+			},
+
+			// --- Misc ---
 			calculateReadTime() {
 				const words = this.bookContent.split(/\s+/).filter(Boolean);
-				this.totalWords = words.length;
-				this.estimatedReadTime = Math.ceil(this.totalWords / 225);
-			},
-			closeAiSidebar() {
-				this.isSidebarOpen = false;
-				this.cancelAiAction();
-			},
-			handleInsertContent(payload) {
-                switch (payload.action) {
-					case 'summary': this.bookContent = `[AI Summary for ${payload.scope}]\n${payload.content}\n\n---\n\n${this.bookContent}`; break;
-					case 'rewrite': this.bookContent = payload.content; break;
-					default: console.warn('Unknown action type:', payload.action); break;
-				}
-				this.calculateReadTime();
-				this.closeAiSidebar();
+				this.estimatedReadTime = Math.ceil(words.length / 225); // Average reading speed
 			},
 			togglePlay() { this.isPlaying = !this.isPlaying; },
-			selectVoice() { uni.showToast({ title: 'Select Voice', icon: 'none' }); },
-			adjustVolume() {},
-			handleVolumeChange(newVolume) { this.volume = newVolume; },
 			nextPage() { this.scrollTop = this.currentScrollTop + this.scrollViewHeight; },
+			handleVolumeChange(newVolume) { settingsCacheService.saveVolume(newVolume); }
 		}
 	}
 </script>
 
-<!-- The renderjs script and styles for library-book.vue remain unchanged -->
 <script module="selection" lang="renderjs">
+	// This script block is unchanged as it handles low-level DOM interactions.
 	export default {
-		data() { return { isListenerAttached: false, longPressTimer: null, isLongPressActive: false } },
+		data: () => ({ isListenerAttached: false, longPressTimer: null, isLongPressActive: false }),
 		methods: {
-			setupListener(newValue, oldValue, ownerInstance, instance) {
+			setupListener(newValue, oldValue, ownerInstance) {
 				if (this.isListenerAttached) return;
 				this.ownerInstance = ownerInstance;
 				const element = ownerInstance.$el.querySelector('.book-text');
@@ -309,42 +370,45 @@
 					this.isListenerAttached = true;
 				}
 			},
-			onClearTrigger(newValue, oldValue, ownerInstance, instance) { if (newValue > oldValue) this.clearSelection(); },
+			onClearTrigger(newValue, oldValue) { if (newValue > oldValue) this.clearSelection(); },
 			handleTouchStart() {
-				this.cleanupTimer(); this.isLongPressActive = false;
+				this.cleanupTimer();
+				this.isLongPressActive = false;
 				this.longPressTimer = setTimeout(() => {
-					this.isLongPressActive = true; this.ownerInstance.callMethod('activateAiAction');
-					const selectedText = window.getSelection().toString();
-					this.ownerInstance.callMethod('updateSelectedText', selectedText.trim());
+					this.isLongPressActive = true;
+					this.ownerInstance.callMethod('activateAiAction');
+					this.ownerInstance.callMethod('updateSelectedText', window.getSelection().toString().trim());
 				}, 800);
 			},
 			handleSelectionChange() {
 				if (!this.isLongPressActive) return;
-				const selectedText = window.getSelection().toString();
-				this.ownerInstance.callMethod('updateSelectedText', selectedText.trim());
+				this.ownerInstance.callMethod('updateSelectedText', window.getSelection().toString().trim());
 			},
 			handleInteractionEnd() {
 				this.cleanupTimer();
 				setTimeout(() => {
-					if (this.isLongPressActive) { if (window.getSelection().toString().length === 0) { this.ownerInstance.callMethod('cancelAiAction'); } }
+					if (this.isLongPressActive && window.getSelection().toString().length === 0) {
+						this.ownerInstance.callMethod('cancelAiAction');
+					}
 					this.isLongPressActive = false;
 				}, 50);
 			},
-			cleanupTimer() { if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; } },
+			cleanupTimer() {
+				if (this.longPressTimer) {
+					clearTimeout(this.longPressTimer);
+					this.longPressTimer = null;
+				}
+			},
 			clearSelection() { if (window.getSelection) window.getSelection().removeAllRanges(); }
 		}
 	}
 </script>
 
 <style scoped>
+	/* Styles are unchanged */
 	.reader-container { height: 100vh; transition: background-color 0.3s ease; }
-	.top-bar { position: fixed; left: 0; right: 0; top: 0; backdrop-filter: blur(10px); z-index: 100; padding: 0 15px; padding-top: var(--status-bar-height); border-bottom: 1px solid rgba(0, 0, 0, 0.08); }
-	.top-bar-content { display: flex; justify-content: space-between; align-items: center; height: 44px; }
-	.action-btn { margin-left: 20px; font-size: 16px; cursor: pointer; }
 	.content-scroll { height: 100vh; }
-	.book-content { padding: 20px; padding-top: calc(var(--status-bar-height) + 44px + 20px); padding-bottom: calc(var(--safe-area-inset-bottom) + 120px + 20px); }
+	.book-content { padding: 20px; padding-top: calc(var(--status-bar-height) + 64px); padding-bottom: calc(var(--safe-area-inset-bottom) + 120px); }
 	.book-title-header { display: block; font-size: 24px; font-weight: bold; margin-bottom: 20px; }
 	.book-text { line-height: 1.8; white-space: pre-wrap; }
-	.fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
-	.fade-enter, .fade-leave-to { opacity: 0; }
 </style>

@@ -1,15 +1,14 @@
 <template>
 	<view class="profile-container">
-		<!-- The component now assumes the user is always logged in (as a visitor or registered user) -->
-		<!-- Logged In View -->
-		<view v-if="isLoggedIn" class="profile-info">
+		<!-- The component now uses the UserProfileCacheService, which ensures a profile always exists. -->
+		<view v-if="userProfile" class="profile-info">
 			<!-- User Profile Section -->
 			<view class="profile-header">
 				<uni-icons type="person-circle-filled" size="80" color="#007AFF"></uni-icons>
 				<!-- View Mode -->
 				<view v-if="!isEditing" class="profile-details">
-					<text class="username">{{ user.username }}</text>
-					<text class="email">{{ user.email || 'No email provided' }}</text>
+					<text class="username">{{ userProfile.username }}</text>
+					<text class="email">{{ userProfile.email || 'No email provided' }}</text>
 					<button class="edit-btn" size="mini" @click="handleEdit">Edit Profile</button>
 				</view>
 				<!-- Edit Mode -->
@@ -29,7 +28,7 @@
 					<view class="budget-left">
 						<uni-icons type="wallet" size="24" color="#007AFF"></uni-icons>
 						<text class="section-title">AI Budget</text>
-						<text class="budget-value">{{ user.aiBudget }}</text>
+						<text class="budget-value">{{ userProfile.aiBudget }}</text>
 					</view>
 					<button class="top-up-btn" size="mini" type="default" @click="handleTopUp">Top up</button>
 				</view>
@@ -39,17 +38,17 @@
 				</view>
 			</view>
 
-			<!-- History Section -->
+			<!-- ALIGNED: History Section bound to userProfile.readHistory -->
 			<view class="profile-section">
 				<view class="history-item">
 					<uni-icons type="calendar" size="24" color="#007AFF"></uni-icons>
 					<text class="section-title">Reading History</text>
 				</view>
 				<uni-list class="history-list" :border="false">
-					<uni-list-item title="Total reading time" :rightText="user.history.totalReadingTime"></uni-list-item>
-					<uni-list-item title="This month" :rightText="user.history.thisMonthReadingTime"></uni-list-item>
-					<uni-list-item title="Total read books" :rightText="String(user.history.totalReadBooks)"></uni-list-item>
-					<uni-list-item title="Total finished read book" :rightText="String(user.history.totalFinishedBooks)"></uni-list-item>
+					<uni-list-item title="Total reading time" :rightText="userProfile.readHistory.totalReadingTime"></uni-list-item>
+					<uni-list-item title="This month" :rightText="userProfile.readHistory.thisMonthReadingTime"></uni-list-item>
+					<uni-list-item title="Total read books" :rightText="String(userProfile.readHistory.totalReadBooks)"></uni-list-item>
+					<uni-list-item title="Total finished read book" :rightText="String(userProfile.readHistory.totalFinishedBooks)"></uni-list-item>
 					
 					<uni-list-item :border="true">
 						<template v-slot:body>
@@ -58,10 +57,13 @@
 									<text class="custom-item-title">Favorite Books</text>
 									<uni-icons :type="isFavoriteBooksExpanded ? 'up' : 'down'" size="16" color="#666"></uni-icons>
 								</view>
+								<!-- ALIGNED: Loop over favoriteBooksDetails to show titles -->
 								<view v-show="isFavoriteBooksExpanded" class="favorite-books-container">
-									<view v-for="(book, index) in user.history.favoriteBooks" :key="index" class="book-entry">
+									<view v-if="favoriteBooksDetails.length === 0">
+										<text class="book-title">No favorite books yet.</text>
+									</view>
+									<view v-for="book in favoriteBooksDetails" :key="book.bookId" class="book-entry">
 										<text class="book-title">{{ book.title }}</text>
-										<text class="book-time">{{ book.time }}</text>
 									</view>
 								</view>
 							</view>
@@ -74,122 +76,98 @@
 </template>
 
 <script>
+	// --- ALIGNED: Import the correct services ---
+	import userProfileCacheService from '@/services/UserProfileCacheService';
+	import bookCacheService from '@/services/BookCacheService';
+
 	export default {
 		data() {
 			return {
-				isLoggedIn: false,
-				user: {},
+				// ALIGNED: Main data object from the service
+				userProfile: null,
+				// State for the edit form
 				isEditing: false,
 				editableUser: {
 					username: '',
 					email: ''
 				},
-				isFavoriteBooksExpanded: false
+				// UI state for the favorites list
+				isFavoriteBooksExpanded: false,
+				// ALIGNED: Holds metadata for favorite books (title, etc.)
+				favoriteBooksDetails: [],
 			};
 		},
 		onShow() {
-			this.checkLoginStatus();
+			// This single method now handles loading and initialization
+			this.loadUserProfile();
 		},
 		methods: {
-			checkLoginStatus() {
-				const loggedInUser = uni.getStorageSync('user');
-				if (loggedInUser) {
-					this.isLoggedIn = true;
-					this.user = loggedInUser;
+			/**
+			 * ALIGNED: Loads the profile from the service.
+			 * This service handles creating a profile if one doesn't exist
+			 * and always recalculates reading stats.
+			 */
+			loadUserProfile() {
+				this.userProfile = userProfileCacheService.getUserProfile();
+				this.loadFavoriteBookDetails();
+			},
+			/**
+			 * ALIGNED: Fetches details for favorite books.
+			 * The profile stores book IDs, so we need to get the metadata (like title)
+			 * from the BookCacheService to display them.
+			 */
+			loadFavoriteBookDetails() {
+				if (this.userProfile && this.userProfile.readHistory.favoriteBooks) {
+					this.favoriteBooksDetails = this.userProfile.readHistory.favoriteBooks
+						.map(bookId => bookCacheService.getBookMetadata(bookId))
+						.filter(book => book !== null); // Filter out any potential nulls if a book was deleted
 				} else {
-					const rememberedVisitor = uni.getStorageSync('visitor_profile');
-					if (rememberedVisitor) {
-						this.loginUser(rememberedVisitor);
-					} else {
-						this.signUpAsVisitor();
-					}
+					this.favoriteBooksDetails = [];
 				}
 			},
-			generateUUID() {
-				return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-					var r = Math.random() * 16 | 0,
-						v = c == 'x' ? r : (r & 0x3 | 0x8);
-					return v.toString(16);
-				});
-			},
-			signUpAsVisitor() {
-				const randomString = Math.random().toString(36).substring(2, 8);
-				const visitorUsername = `Visitor_${randomString}`;
 
-				const newUser = {
-					uuid: this.generateUUID(),
-					username: visitorUsername,
-					email: '',
-					aiBudget: 100,
-					history: {
-						totalReadingTime: '5h 32m',
-						thisMonthReadingTime: '1h 15m',
-						totalReadBooks: 12,
-						totalFinishedBooks: 5,
-						favoriteBooks: [{
-							title: 'The Midnight Library',
-							time: '2h 10m'
-						}, {
-							title: 'Project Hail Mary',
-							time: '1h 45m'
-						}, {
-							title: 'Klara and the Sun',
-							time: '1h 37m'
-						}]
-					}
-				};
-
-				uni.setStorageSync('visitor_profile', newUser);
-				this.loginUser(newUser);
-			},
-			loginUser(userData) {
-				uni.setStorageSync('user', userData);
-				this.isLoggedIn = true;
-				this.user = userData;
-				uni.$emit('userLoggedIn', userData);
-			},
 			handleEdit() {
-				this.editableUser.username = this.user.username;
-				this.editableUser.email = this.user.email;
+				this.editableUser.username = this.userProfile.username;
+				this.editableUser.email = this.userProfile.email;
 				this.isEditing = true;
 			},
+			
+			/**
+			 * ALIGNED: Saves user info using the dedicated service method.
+			 */
 			handleSave() {
-				this.user.username = this.editableUser.username;
-				this.user.email = this.editableUser.email;
-				uni.setStorageSync('user', this.user);
-
-				// If the user being edited is the stored visitor, update the visitor profile as well
-				const visitorProfile = uni.getStorageSync('visitor_profile');
-				if (visitorProfile && visitorProfile.uuid === this.user.uuid) {
-					uni.setStorageSync('visitor_profile', this.user);
-				}
-
-				uni.$emit('userLoggedIn', this.user);
+				userProfileCacheService.updateUserInfo({
+					username: this.editableUser.username,
+					email: this.editableUser.email,
+				});
 				this.isEditing = false;
+				// Reload the profile to ensure the UI is updated with the latest data
+				this.loadUserProfile(); 
 				uni.showToast({
 					title: 'Profile updated!',
 					icon: 'success'
 				});
 			},
+
 			handleCancel() {
 				this.isEditing = false;
 			},
-			handleOAuthLogin(provider) {
-				uni.showToast({
-					title: `Initiating ${provider} login...`,
-					icon: 'none'
-				});
-			},
+			
 			handleTopUp() {
+				// In a real app, this would navigate to a top-up page.
+				// For now, we can add a mock top-up using the service.
+				userProfileCacheService.addTopUp(100);
+				this.loadUserProfile(); // Refresh to show the new balance
 				uni.showToast({
-					title: 'Redirecting to top-up page...',
+					title: 'Added 100 to AI Budget!',
 					icon: 'none'
 				});
 			},
+			
 			showConsumptionRules() {
 				uni.showModal({
 					title: 'Consumption Rules',
-					content: '1. Each AI interaction consumes 1 unit.\n2. Budgets are refilled monthly.',
+					content: 'AI budget is used for various AI-powered tasks like generating new book versions or enhancing content.',
 					showCancel: false
 				});
 			}
@@ -358,10 +336,5 @@
 	.book-title {
 		font-size: 14px;
 		color: #666;
-	}
-
-	.book-time {
-		font-size: 14px;
-		color: #999;
 	}
 </style>

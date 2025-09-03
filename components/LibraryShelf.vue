@@ -1,6 +1,7 @@
 <template>
-	<!-- Added a click handler to the root element -->
+	<!-- Added a click handler to the root element to exit edit mode -->
 	<view class="library-shelf-container" @click="handleShelfClick">
+		<!-- Overlay to capture clicks when in edit mode -->
 		<view 
 			v-if="editingBook" 
 			class="edit-mode-overlay" 
@@ -8,21 +9,23 @@
 		</view>
 
 		<uni-grid :column="3" :show-border="false" :square="false" :highlight="false">
-			<!-- ... v-for loop remains the same ... -->
-			<uni-grid-item v-for="book in libraryBooks" :index="book.marketId" :key="book.marketId">
+			<!-- ALIGNED: Loop over libraryBooks, using the correct bookId as the key -->
+			<uni-grid-item v-for="book in libraryBooks" :index="book.bookId" :key="book.bookId">
 				<view 
 					class="grid-item-box"
-					:class="{ 'edit-mode': editingBook && editingBook.marketId === book.marketId }"
+					:class="{ 'edit-mode': editingBook && editingBook.bookId === book.bookId }"
 					@longpress="selectBookForEditing(book)"
 					@click="handleBookClick(book)">
 					
-					<view v-if="editingBook && editingBook.marketId === book.marketId" class="delete-btn" @click.stop="confirmDelete">
+					<!-- Delete button shown only in edit mode -->
+					<view v-if="editingBook && editingBook.bookId === book.bookId" class="delete-btn" @click.stop="confirmDelete">
 						<uni-icons type="closeempty" size="18" color="#fff"></uni-icons>
 					</view>
 					
-					<image class="book-cover" :class="{ 'new-book-cover': newlyAddedBookId === book.marketId }" :src="book.cover" mode="aspectFill"></image>
+					<image class="book-cover" :class="{ 'new-book-cover': newlyAddedBookId === book.bookId }" :src="book.cover" mode="aspectFill"></image>
 					
-					<template v-if="editingBook && editingBook.marketId === book.marketId">
+					<!-- Input field for editing the title -->
+					<template v-if="editingBook && editingBook.bookId === book.bookId">
 						<input 
 							type="text" 
 							class="book-title-input" 
@@ -31,14 +34,15 @@
 							:focus="true" 
 						/>
 					</template>
-					<template v-else>
-						<text class="book-title" :class="{ 'new-book-title': newlyAddedBookId === book.marketId }">{{ book.title }}</text>
+					<!-- Regular title display -->
+					<template velse>
+						<text class="book-title" :class="{ 'new-book-title': newlyAddedBookId === book.bookId }">{{ book.title }}</text>
 					</template>
 				</view>
 			</uni-grid-item>
 			
+			<!-- "Add New Document" button -->
 			<uni-grid-item>
-				<!-- Added .stop modifier to prevent the shelf click handler from firing -->
 				<view class="grid-item-box" @click.stop="addNewDocument">
 					<view class="add-book-container">
 						<text class="add-btn">+</text>
@@ -48,14 +52,15 @@
 			</uni-grid-item>
 		</uni-grid>
 		
-		<!-- The BookImport component itself handles the close event -->
+		<!-- Book Import Sidebar -->
 		<BookImport :is-open="isImportSidebarOpen" @close="isImportSidebarOpen = false" @upload-complete="handleUploadComplete" />
 	</view>
 </template>
 
 <script>
-	import settingsService from '@/services/settingsService';
-	import BookImport from './BookImport.vue'; // Make sure the path is correct
+	// --- ALIGNED: Using the correct BookCacheService for all data operations ---
+	import bookCacheService from '@/services/BookCacheService';
+	import BookImport from './BookImport.vue';
 
 	export default {
 		name: "LibraryShelf",
@@ -63,6 +68,8 @@
 			BookImport
 		},
 		props: {
+			// The parent component is responsible for fetching and passing the book list.
+			// This list should be an array of BookMetadata objects.
 			libraryBooks: {
 				type: Array,
 				required: true
@@ -70,15 +77,18 @@
 		},
 		data() {
 			return {
-				editingBook: null,
+				editingBook: null, // Holds a copy of the book being edited
 				originalEditingTitle: null,
 				isImportSidebarOpen: false,
-				newlyAddedBookId: null
+				newlyAddedBookId: null // To highlight a newly added book
 			};
 		},
 		methods: {
-			// New method to close sidebar when clicking on the shelf area
 			handleShelfClick() {
+				// If clicking anywhere on the shelf, exit edit mode
+				if (this.editingBook) {
+					this.handleBackgroundClick();
+				}
 				if (this.isImportSidebarOpen) {
 					this.isImportSidebarOpen = false;
 				}
@@ -88,21 +98,16 @@
 				this.isImportSidebarOpen = true;
 			},
 			
-			// ... [ The rest of your methods remain unchanged ] ...
-			handleBookClick(book, event) {
-				if (this.editingBook) {
-					if (this.editingBook.marketId !== book.marketId) {
-						this.handleBackgroundClick();
-					}
-					event.stopPropagation();
+			handleBookClick(book) {
+				// If in edit mode, clicking a different book should exit edit mode first
+				if (this.editingBook && this.editingBook.bookId !== book.bookId) {
+					this.handleBackgroundClick();
 					return;
 				}
-
-				if (this.newlyAddedBookId === book.marketId) {
-					this.newlyAddedBookId = null;
+				// If not in edit mode, navigate to the book reader page
+				if (!this.editingBook) {
+					this.navigateToLibraryBook(book);
 				}
-
-				this.navigateToLibraryBook(book);
 			},
 
 			handleBackgroundClick() {
@@ -127,35 +132,45 @@
 			},
 			
 			navigateToLibraryBook(book) {
+				// ALIGNED: Navigate using the correct 'bookId' property
 				uni.navigateTo({
-					url: `/pages/library/LibraryBook?id=${book.marketId}&title=${encodeURIComponent(book.title)}`
+					url: `/pages/library/LibraryBook?id=${book.bookId}`
 				});
 			},
 			
 			handleUploadComplete(newBook) {
-				this.libraryBooks.unshift(newBook);
-				this.newlyAddedBookId = newBook.marketId;
-				// The sidebar now closes itself upon success
-				// this.isImportSidebarOpen = false; 
+				// The parent will handle adding the book to the cache.
+				// We just need to signal that an update happened.
+				this.newlyAddedBookId = newBook.bookId;
 				this.$emit('libraryUpdated');
 			},
 			
 			selectBookForEditing(book) {
-				if (this.editingBook && this.editingBook.marketId !== book.marketId) {
+				if (this.editingBook && this.editingBook.bookId !== book.bookId) {
 					this.handleBackgroundClick();
 				}
 				this.editingBook = { ...book };
 				this.originalEditingTitle = book.title;
 			},
 			
+			/**
+			 * ALIGNED: Saves the custom title to the book's ReaderMetadata.
+			 */
 			saveBookTitle() {
 				if (!this.editingBook) return;
-				const bookInArray = this.libraryBooks.find(b => b.marketId === this.editingBook.marketId);
-				if (bookInArray) {
-					bookInArray.title = this.editingBook.title;
-				}
-				settingsService.updateBookInLibrary(this.editingBook);
+				
+				const bookId = this.editingBook.bookId;
+				const newTitle = this.editingBook.title;
+
+				// Fetch the specific metadata for this reader
+				const readerMeta = bookCacheService.getReaderMetadata(bookId);
+				// Set the custom title
+				readerMeta.customTitle = newTitle;
+				// Save the updated metadata back to the cache
+				bookCacheService.saveReaderMetadata(bookId, readerMeta);
+				
 				this.exitEditMode();
+				// Notify the parent component to refetch the data to show the new title
 				this.$emit('libraryUpdated');
 			},
 			
@@ -168,7 +183,7 @@
 				if (!this.editingBook) return;
 				uni.showModal({
 					title: 'Confirm Deletion',
-					content: `Are you sure you want to delete "${this.originalEditingTitle}"?`,
+					content: `Are you sure you want to remove "${this.originalEditingTitle}" from your library?`,
 					success: (res) => {
 						if (res.confirm) {
 							this.deleteBook();
@@ -177,10 +192,22 @@
 				});
 			},
 			
+			/**
+			 * ALIGNED: Deletes a book by removing its ID from the library list in the cache.
+			 */
 			deleteBook() {
 				if (!this.editingBook) return;
-				settingsService.removeBookFromLibrary(this.editingBook.marketId);
+				
+				const bookIdToDelete = this.editingBook.bookId;
+				// Get the current list of library book IDs
+				const libraryBookIds = bookCacheService.getLibraryBooks();
+				// Create a new list without the deleted book's ID
+				const updatedLibraryIds = libraryBookIds.filter(id => id !== bookIdToDelete);
+				// Save the updated list back to the cache
+				bookCacheService.saveLibraryBooks(updatedLibraryIds);
+
 				this.exitEditMode();
+				// Notify the parent to refetch and update the UI
 				this.$emit('libraryUpdated');
 			}
 		}
@@ -188,7 +215,6 @@
 </script>
 
 <style scoped>
-	/* ... [existing styles from previous answer] ... */
 
 	.new-book-title {
 		font-weight: bold;
@@ -199,7 +225,6 @@
 		box-shadow: 0 0 10px rgba(0, 122, 255, 0.5);
 	}
 	
-	/* The rest of the styles are unchanged */
 	.grid-item-box {
 		display: flex;
 		flex-direction: column;
@@ -274,12 +299,12 @@
 	}
 	
 	.edit-mode-overlay {
-		position: fixed; /* Covers the entire viewport */
+		position: fixed;
 		top: 0;
 		left: 0;
 		width: 100%;
 		height: 100%;
-		background-color: transparent; /* Makes it invisible */
+		background-color: transparent;
 		z-index: 10; 
 	}
 </style>

@@ -1,44 +1,45 @@
 {
 	"pages": [ //pages数组中第一项表示应用启动页，参考：https://uniapp.dcloud.io/collocation/pages
 		{
-					"path": "pages/index/index",
-					"style": {
-						"navigationBarTitleText": "AI-Reading"
-					}
-				},
-				{
-					"path" : "pages/library/LibraryBook",
-					"style" : 
-					{
-						"navigationStyle": "custom",
-						"navigationBarTitleText" : "Library Book"
-					}
-				},
-				{
-					"path": "pages/index/Settings",
-					"style": {
-						"navigationBarTitleText": "Settings"
-					}
-				},
-				{
-					"path": "pages/index/BookManagement",
-					"style": {
-						"navigationBarTitleText": "BookManagement"
-					}
-				},
-				{
-					"path": "pages/index/Profile",
-					"style": {
-						"navigationBarTitleText": "Profile"
-					}
-				},
-				{
-					"path" : "components/BookImport",
-					"style" : 
-					{
-						"navigationBarTitleText" : ""
-					}
-				}
+		"path": "pages/index/index",
+			"style": {
+				"navigationBarTitleText": "AI-Reading"
+			}
+		},
+		{
+			"path" : "pages/library/LibraryBook",
+			"style" : 
+			{
+				"navigationStyle": "custom",
+				"navigationBarTitleText" : "Library Book"
+			}
+		},
+		{
+			"path": "pages/index/Settings",
+			"style": {
+				"navigationBarTitleText": "Settings"
+			}
+		},
+		{
+			"path": "pages/index/BookManagement",
+			"style": {
+				"navigationBarTitleText": "BookManagement"
+			}
+		},
+		{
+			"path": "pages/index/Profile",
+			"style": {
+				"navigationBarTitleText": "Profile"
+			}
+		},
+		{
+			"path" : "pages/library/LibraryBookMerge",
+			"style" : 
+			{
+				"navigationStyle": "custom",
+				"navigationBarTitleText" : "Library Book Merge"
+			}
+		}
 	],
 	"globalStyle": {
 		"navigationBarTextStyle": "black",

@@ -10,7 +10,6 @@
 			</view>
 			
 			<view class="summary-container">
-				<!-- MODIFIED: Added a space after "Summary" -->
 				<text class="summary-title">Summary </text>
 				<text class="summary-content">{{ summary }}</text>
 			</view>
@@ -26,12 +25,14 @@
 </template>
 
 <script>
-	// Script section remains unchanged from the previous version
 	import settingsService from '@/services/settingsService';
 
 	export default {
+		// MODIFIED: Component name added
+		name: 'BookMarketInfo',
 		props: {
-			marketId: { type: [String, Number], required: true },
+			// MODIFIED: Renamed 'marketId' to 'bookId'
+			bookId: { type: [String, Number], required: true },
 			userBookId: { type: [String, Number], default: '' },
 			cover: { type: String, default: '' },
 			title: { type: String, default: 'No Title' },
@@ -45,7 +46,8 @@
 			};
 		},
 		watch: {
-			marketId: {
+			// MODIFIED: Watcher now observes 'bookId'
+			bookId: {
 				handler(newId) {
 					if (newId) {
 						this.isAdded = settingsService.isBookInLibrary(newId);
@@ -57,7 +59,8 @@
 		methods: {
 			addToLibrary() {
 				const bookData = {
-					marketId: this.marketId,
+					// MODIFIED: Changed property from 'marketId' to 'bookId'
+					bookId: this.bookId,
 					title: this.title,
 					cover: this.cover,
 					tags: this.tags,
@@ -80,7 +83,6 @@
 </script>
 
 <style>
-	/* ... (most styles are unchanged) ... */
 	.book-basic-info-overlay {
 		position: fixed;
 		top: 0;
@@ -114,7 +116,6 @@
 		margin-bottom: 15px;
 	}
 	
-	/* === STYLE MODIFIED HERE === */
 	.book-title {
 		font-size: 20px;
 		font-weight: bold;
@@ -126,7 +127,6 @@
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		/* MODIFIED: Changed word-break to a more suitable property */
 		overflow-wrap: break-word;
 	}
 

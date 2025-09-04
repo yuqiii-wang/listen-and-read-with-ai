@@ -5,17 +5,17 @@
 		<uni-transition mode-class="fade" :show="show">
 			<view v-if="show" class="top-bar" :style="{ backgroundColor: topBarBackgroundColor }">
 				<view class="top-bar-content">
-					<uni-icons type="back" size="24" :color="theme.textColor" @click.stop="goBackIndex"></uni-icons>
+					<uni-icons type="back" size="24" :color="iconColor" @click.stop="goBackIndex"></uni-icons>
 					<view class="top-bar-actions">
 						<text 
-							v-if="totalVersionNum > 1" 
+							v-if="totalVersionNum > 1 && this.selectedText.length === 0" 
 							class="action-btn" 
-							:style="{ color: theme.actionColor }" 
+							:style="{ color: actionColor }" 
 							@click.stop="toggleHistoryPanel"
 						>AI History</text>
 						<text 
 							class="action-btn" 
-							:style="{ color: theme.actionColor }" 
+							:style="{ color: actionColor }" 
 							@click.stop="handleShowAiInfo"
 						>{{ topBarActionText }}</text>
 					</view>
@@ -27,7 +27,7 @@
 			<view class="overlay" @click="toggleHistoryPanel"></view>
 		</uni-transition>
 				
-		<view :class="['history-panel-container', { 'panel-visible': isHistoryPanelVisible }]">
+		<view :class="['history-panel-container', { 'panel-visible': isHistoryPanelVisible }]" :style="{ backgroundColor: historyPanelBackgroundColor }">
 			<!-- MODIFIED: Ensured all necessary props are passed to BookHistoryVersions -->
 			<BookHistoryVersions
 				v-if="isHistoryPanelMounted"
@@ -69,7 +69,7 @@
 			bookId: { type: [String, Number], required: true },
 			show: { type: Boolean, default: false },
 			theme: { type: Object, required: true },
-			topBarActionText: { type: String, default: 'AI Info' },
+			topBarActionText: { type: String, default: 'AI Rewrite' },
 			totalVersionNum: { type: Number, default: 0 },
 			isAiActionPending: { type: Boolean, default: false },
 			selectedText: { type: String, default: '' },
@@ -111,10 +111,34 @@
 		},
 		computed: {
 			topBarBackgroundColor() {
-				return this.theme.name === 'Black' ? 'rgba(40, 40, 40, 0.95)' : 'rgba(255, 255, 255, 0.9)';
+				const navColor = this.theme.navBar?.backgroundColor || '#FFFFFF';
+				return this.hexToRgba(navColor, 0.95);
+			},
+			historyPanelBackgroundColor() {
+				return this.theme.backgroundColor || '#FFFFFF';
+			},
+			iconColor() {
+				return this.theme.primaryTextColor;
+			},
+			actionColor() {
+				return this.theme.activeColor;
 			}
 		},
 		methods: {
+			hexToRgba(hex, opacity) {
+				if (!hex) return `rgba(255, 255, 255, ${opacity})`;
+				let r = 0, g = 0, b = 0;
+				if (hex.length == 4) {
+					r = parseInt(hex[1] + hex[1], 16);
+					g = parseInt(hex[2] + hex[2], 16);
+					b = parseInt(hex[3] + hex[3], 16);
+				} else if (hex.length == 7) {
+					r = parseInt(hex.substring(1, 3), 16);
+					g = parseInt(hex.substring(3, 5), 16);
+					b = parseInt(hex.substring(5, 7), 16);
+				}
+				return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+			},
 			goBackIndex() {
 				uni.navigateTo({
 					url: "/pages/index/index"
@@ -134,7 +158,14 @@
 						uni.showToast({ title: 'Please select some text first', icon: 'none' });
 					}
 				} else {
-					this.sidebarMode = 'default';
+					// In default mode, also set committedSelectedText if there's selected text
+					if (this.selectedText.length > 0) {
+						this.committedSelectedText = this.selectedText;
+						this.sidebarMode = 'userInput';
+					} else {
+						this.committedSelectedText = '';
+						this.sidebarMode = 'default';
+					}
 					this.isSidebarOpen = true;
 				}
 			},

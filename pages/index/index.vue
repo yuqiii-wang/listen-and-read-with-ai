@@ -48,12 +48,14 @@
 			<library-shelf
 				v-if="activeTab === 'library'"
 				:library-books="libraryBooks"
+				:theme-styles="themeStyles"
 				@libraryUpdated="loadBooks">
 			</library-shelf>
 
 			<book-market
 				v-if="activeTab === 'market'"
 				:market-books="marketBooks"
+				:theme-styles="themeStyles"
 				@bookSelected="openBookMarketInfo">
 			</book-market>
 		</view>
@@ -124,13 +126,22 @@
 			 * Aligns with the defined data model.
 			 */
 			loadBooks() {
-				const allBooksMetadata = bookCacheService.getAllBooks(); // This initializes data if it doesn't exist
-				
-				// Load Library Books
+				const allBooksMetadata = bookCacheService.getAllBooks();
+			
+				// Load Library Books and apply custom titles
 				const libraryBookIds = bookCacheService.getLibraryBooks();
-				this.libraryBooks = allBooksMetadata.filter(book => libraryBookIds.includes(book.bookId));
-
-				// Load Market Books
+				this.libraryBooks = allBooksMetadata
+					.filter(book => libraryBookIds.includes(book.bookId))
+					.map(book => {
+						const readerMeta = bookCacheService.getReaderMetadata(book.bookId);
+						// Return a new object with the potentially overridden title
+						return {
+							...book,
+							title: readerMeta?.customTitle || book.title
+						};
+					});
+			
+				// Load Market Books (they don't have custom titles)
 				const marketBookIds = bookCacheService.getMarketBooks();
 				this.marketBooks = allBooksMetadata.filter(book => marketBookIds.includes(book.bookId));
 			},
@@ -185,6 +196,9 @@
 </script>
 
 <style>
+	.container {
+		min-height: 100vh;
+	}
 	/* Keep structural and non-color styles. Colors are now handled dynamically. */
 	.custom-nav-bar {
 		position: fixed;

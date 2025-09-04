@@ -23,9 +23,10 @@ interface BookMetadata {
  */
 interface ReaderMetadata {
   bookId: number;
-  version: number;
-  readTime: number; // in seconds
-  lastReadSentenceId: number;
+  version: number; // current active version
+  readTime: number; // total reading time in seconds across all versions
+  lastReadSentenceId: { [version: number]: number }; // maps version to last read sentence ID for that version
+  lastReadScroll: { [version: number]: number }; // maps version to last read scroll position for that version
   isAudioPlaying: boolean;
   customTitle: string | null;
   customSummary: string | null;
@@ -68,13 +69,13 @@ interface BookAudio {
 
 /**
  * Represents a single version of a book.
+ * even each in-progress AI task is a version, regardless of its completion status, or deleted.
  */
 interface Version {
   version: number;
   taskName: string;
   versionCreatedAt: string;
   isAiTaskInProgress: boolean;
-  aiTasksInProgress: number;
 }
 
 /**
@@ -191,20 +192,45 @@ class BookCacheService {
     }, {
       bookId: 3,
       isMarketAvailable: false,
-      title: "Journey to the Unknown AAA",
-      author: "AI Author",
-      tags: ["Sci-Fi", "Mystery"],
-      summary: "An epic saga that explores the vast, unknown regions of the galaxy AAA.",
+      title: "Secrets of the Old Forest",
+      author: "Nature Scribe",
+      tags: ["Nature", "Mystery"],
+      summary: "A hidden world of secrets is discovered in an ancient forest.",
       reader: "AI Voice",
       cover: "/static/covers/cover3.png",
-    }, ];
+    }, {
+	  bookId: 4,
+	  isMarketAvailable: true,
+	  title: "Cybernetic Dreams",
+	  author: "Synth Weaver",
+	  tags: ["Cyberpunk", "Sci-Fi"],
+	  summary: "In a neon-drenched future, a detective hunts for a rogue AI.",
+	  reader: "Professional Narrator",
+	  cover: "/static/covers/cover1.png", 
+	}, {
+	  bookId: 5,
+	  isMarketAvailable: true,
+	  title: "The Last Spell",
+	  author: "Mage Chronicler",
+	  tags: ["Fantasy", "Magic"],
+	  summary: "The story of the final spell that changed the world forever.",
+	  reader: "AI Voice",
+	  cover: "/static/covers/cover2.png",
+	}];
 
     // Relevant Logic: Only books where isMarketAvailable is true shall be in marketBooks.
     const marketBooks: number[] = allBooks
       .filter(book => book.isMarketAvailable)
       .map(book => book.bookId);
 
-    const libraryBooks: number[] = []; // bookIds
+    // Add book 1 and 3 to the library by default for testing.
+    const libraryBooks: number[] = [1, 3]; 
+
+    console.log("[BookCacheService] Created initial book lists:", {
+        allBooksCount: allBooks.length,
+        marketBooks: marketBooks,
+        libraryBooks: libraryBooks
+    });
 
     return {
       allBooks,
@@ -221,8 +247,9 @@ class BookCacheService {
     return {
       bookId: bookId,
       version: 1, // Default to reading the first version
-      readTime: 0, // In seconds
-      lastReadSentenceId: 0,
+      readTime: 0, // Total reading time in seconds across all versions
+      lastReadSentenceId: { 1: 0 }, // Default to sentence 0 for version 1
+      lastReadScroll: { 1: 0 }, // Default to 0% scroll for version 1
       isAudioPlaying: false,
       // New customizable fields
       customTitle: null,
@@ -252,16 +279,14 @@ class BookCacheService {
       runningAiTasks: [], // Holds the full details of any running tasks
       allVersions: [{
         version: 1,
-        taskName: "Initial Draft",
-        versionCreatedAt: new Date(Date.now() - 86400000).toLocaleString(),
-        isAiTaskInProgress: false,
-        aiTasksInProgress: 0
+        taskName: "Initial Version",
+        versionCreatedAt: new Date(Date.now() - 86400000).toISOString(), // 1 day ago
+        isAiTaskInProgress: false
       }, {
         version: 2,
-        taskName: "AI-Enhanced Rewrite",
-        versionCreatedAt: new Date().toLocaleString(),
-        isAiTaskInProgress: false,
-        aiTasksInProgress: 0
+        taskName: "AI Enhanced Version",
+        versionCreatedAt: new Date().toISOString(),
+        isAiTaskInProgress: false
       }, ]
     };
     const BookAudio: BookAudio = {
@@ -404,8 +429,6 @@ class BookCacheService {
   }
 
 
-  // --- NEW FUNCTION for adding market books to the library ---
-
   /**
    * Adds a book from the market to the user's library.
    * Logic: A book can be added to the library if it exists in the market books
@@ -422,19 +445,18 @@ class BookCacheService {
     const isBookAlreadyInLibrary = libraryBooks.includes(bookId);
 
     if (isBookInMarket && !isBookAlreadyInLibrary) {
-      const updatedLibraryBooks = [...libraryBooks, bookId];
-      this.saveLibraryBooks(updatedLibraryBooks);
-      console.log(`Book with ID ${bookId} was successfully added to the library.`);
+			libraryBooks.push(bookId);
+			this.saveLibraryBooks(libraryBooks);
       return true;
     } else {
-      if (!isBookInMarket) {
-        console.warn(`Failed to add book ${bookId} to library: It is not available in the market.`);
-      }
-      if (isBookAlreadyInLibrary) {
-        console.warn(`Failed to add book ${bookId} to library: It is already in the library.`);
-      }
-      return false;
-    }
+			if (!isBookInMarket) {
+				console.warn(`Book with ID ${bookId} is not in the market.`);
+			}
+			if (isBookAlreadyInLibrary) {
+				console.warn(`Book with ID ${bookId} is already in the library.`);
+			}
+			return false;
+		}
   }
 
 
@@ -601,15 +623,56 @@ class BookCacheService {
 
   // --- AI Task Management ---
 
-  public startAITask(bookId: number, taskName: string = "New AI Task"): void {
+  /**
+   * Calculates consumption cost based on sentence count
+   * @param {number} currentVersionSentences - Number of sentences in current version
+   * @param {number} newVersionSentences - Number of sentences in new version (default 0 for cancellation)
+   * @param {number} multiplier - Cost multiplier (default 1, 1.3 for acceleration)
+   * @returns {number} Calculated cost
+   */
+  private calculateConsumptionCost(currentVersionSentences: number, newVersionSentences: number = 0, multiplier: number = 1): number {
+    const baseCost = (currentVersionSentences + newVersionSentences) * 0.1; // 0.1 cost per sentence
+    return Math.ceil(baseCost * multiplier);
+  }
+
+  public startAITask(bookId: number, taskName: string = "New AI Task", onConsumeAIBudget?: (details: any) => boolean): void {
     let {
       bookData,
       bookAllVersion,
       BookAudio
     } = this.getBookContentById(bookId);
 
+    // Check if there's already a running task with the same name for the same book
+    const existingTask = bookAllVersion.runningAiTasks.find(task => task.name === taskName);
+    if (existingTask) {
+      console.warn(`AI task "${taskName}" is already running for book ${bookId}`);
+      return;
+    }
+
+    console.log(`[BookCacheService] Starting AI task: ${taskName} for book ${bookId}`);
+
     const maxVersionId = bookAllVersion.allVersions.reduce((max, v) => Math.max(max, v.version), 0);
     const newVersionId = maxVersionId + 1;
+
+    // Calculate consumption cost
+    const currentVersionSentences = bookData.sentences.filter(s => s.version === bookAllVersion.currentVersionId).length;
+    const estimatedNewVersionSentences = Math.max(currentVersionSentences * 0.3, 5); // Estimate 30% more sentences or minimum 5
+    const consumptionCost = this.calculateConsumptionCost(currentVersionSentences, estimatedNewVersionSentences);
+
+    // Check and consume AI budget
+    if (onConsumeAIBudget) {
+      const consumptionSuccess = onConsumeAIBudget({
+        aiTask: taskName,
+        bookId: bookId,
+        version: newVersionId,
+        spentAmount: consumptionCost
+      });
+
+      if (!consumptionSuccess) {
+        console.warn(`Insufficient AI budget for task "${taskName}"`);
+        return;
+      }
+    }
 
     const currentVersion = bookAllVersion.allVersions.find(v => v.version === bookAllVersion.currentVersionId);
     if (!currentVersion) {
@@ -626,11 +689,20 @@ class BookCacheService {
       parentVersionId: currentVersion.version, // Link task to its parent version
     };
 
+    // Create the new version entry immediately with isAiTaskInProgress: true
+    const newVersion: Version = {
+      version: newVersionId,
+      taskName: taskName,
+      versionCreatedAt: new Date().toISOString(),
+      isAiTaskInProgress: true
+    };
+
+    // Add the new version to allVersions
+    bookAllVersion.allVersions.push(newVersion);
+
     // Add task to the central running list
     bookAllVersion.runningAiTasks.push(newTask);
-    // Update the parent version's counters
-    currentVersion.aiTasksInProgress++;
-    currentVersion.isAiTaskInProgress = true;
+        
     this.saveBookContent(bookId, bookData, bookAllVersion, BookAudio);
 
     const intervalId = setInterval(() => {
@@ -655,7 +727,6 @@ class BookCacheService {
         const maxSentenceId = currentBookData.sentences.reduce((max, s) => Math.max(max, s.sentenceId), -1);
         let sentenceIdCounter = maxSentenceId + 1;
 
-
         const newContent =
           `This is the newly generated content from "${task.name}" for version ${task.newVersionId}. `;
         for (let i = 0; i < 5; i++) {
@@ -672,27 +743,34 @@ class BookCacheService {
           });
         }
 
-        // Create the new version entry
-        currentBookAllVersion.allVersions.push({
-          version: task.newVersionId,
-          taskName: task.name,
-          versionCreatedAt: new Date().toLocaleString(),
-          isAiTaskInProgress: false,
-          aiTasksInProgress: 0
-        });
-
         // Remove completed task from the running list
         currentBookAllVersion.runningAiTasks.splice(taskIndex, 1);
 
-        // Update the parent version's task count
-        const taskParentVersion = currentBookAllVersion.allVersions.find(v => v.version === task.parentVersionId);
-        if (taskParentVersion) {
-          taskParentVersion.aiTasksInProgress--;
-          taskParentVersion.isAiTaskInProgress = taskParentVersion.aiTasksInProgress > 0;
+        // Update the completed version's status (version already exists from startAITask)
+        const completedVersion = currentBookAllVersion.allVersions.find(v => v.version === task.newVersionId);
+        if (completedVersion) {
+          completedVersion.isAiTaskInProgress = false;
         }
 
-        currentBookAllVersion.currentVersionId = task.newVersionId;
+        // Update the parent version's task status
+        const taskParentVersion = currentBookAllVersion.allVersions.find(v => v.version === task.parentVersionId);
+        if (taskParentVersion) {
+          // Check if there are any other running tasks for this parent version
+          const remainingTasks = currentBookAllVersion.runningAiTasks.filter(t => t.parentVersionId === task.parentVersionId && t.id !== task.id);
+          taskParentVersion.isAiTaskInProgress = remainingTasks.length > 0;
+        }
+
+        // Don't change currentVersionId - keep the original current version
+        // Users can manually switch to the new version if they want
+        
         this.saveBookContent(bookId, currentBookData, currentBookAllVersion, currentBookAudio);
+        
+        // Emit completion event for UI updates
+        uni.$emit('ai-task-completed', {
+          bookId: bookId,
+          completedVersionId: task.newVersionId,
+          taskName: task.name
+        });
 
       } else {
         this.saveBookContent(bookId, currentBookData, currentBookAllVersion, currentBookAudio);
@@ -700,21 +778,42 @@ class BookCacheService {
     }, 1000);
   }
 
-  public cancelAITask(bookId: number, taskKey: string): void {
+  public cancelAITask(bookId: number, taskKey: string, onConsumeAIBudget?: (details: any) => boolean): void {
     let {
       bookData,
       bookAllVersion,
       BookAudio
     } = this.getBookContentById(bookId);
-    const [taskName, versionStr] = taskKey.split('_v');
-    const versionId = parseInt(versionStr, 10);
 
-    const taskIndex = bookAllVersion.runningAiTasks.findIndex(
-      t => t.name === taskName && t.newVersionId === versionId
-    );
+    // Try to find by task ID first (new way), then fall back to old parsing method
+    let taskIndex = bookAllVersion.runningAiTasks.findIndex(t => t.id === taskKey);
+    
+    if (taskIndex === -1) {
+      // Fall back to old method for backward compatibility
+      const [taskName, versionStr] = taskKey.split('_v');
+      const versionId = parseInt(versionStr, 10);
+      taskIndex = bookAllVersion.runningAiTasks.findIndex(
+        t => t.name === taskName && t.newVersionId === versionId
+      );
+    }
 
     if (taskIndex !== -1) {
       const task = bookAllVersion.runningAiTasks[taskIndex];
+      console.log(`[BookCacheService] Cancelling AI task: ${task.name} for book ${bookId}`);
+
+      // Calculate and charge cancellation cost (only current version)
+      const currentVersionSentences = bookData.sentences.filter(s => s.version === bookAllVersion.currentVersionId).length;
+      const cancellationCost = this.calculateConsumptionCost(currentVersionSentences, 0); // No new version cost
+
+      // Log consumption for cancellation
+      if (onConsumeAIBudget) {
+        onConsumeAIBudget({
+          aiTask: `Cancel ${task.name}`,
+          bookId: bookId,
+          version: task.newVersionId,
+          spentAmount: cancellationCost
+        });
+      }
 
       // Find the parent version to update its count
       const parentVersion = bookAllVersion.allVersions.find(v => v.version === task.parentVersionId);
@@ -722,32 +821,247 @@ class BookCacheService {
       // Remove the task from the running list
       bookAllVersion.runningAiTasks.splice(taskIndex, 1);
 
+      // Remove the in-progress version that was created
+      const versionIndex = bookAllVersion.allVersions.findIndex(v => v.version === task.newVersionId);
+      if (versionIndex !== -1) {
+        bookAllVersion.allVersions.splice(versionIndex, 1);
+        console.log(`[BookCacheService] Removed in-progress version ${task.newVersionId}`);
+      }
+
       if (parentVersion) {
-        parentVersion.aiTasksInProgress--;
-        parentVersion.isAiTaskInProgress = parentVersion.aiTasksInProgress > 0;
+        // Check if there are any other running tasks for this parent version
+        const remainingTasks = bookAllVersion.runningAiTasks.filter(t => t.parentVersionId === parentVersion.version && t.id !== task.id);
+        parentVersion.isAiTaskInProgress = remainingTasks.length > 0;
       }
 
       this.saveBookContent(bookId, bookData, bookAllVersion, BookAudio);
+      
+      // Emit cancellation event for UI updates
+      uni.$emit('ai-task-cancelled', {
+        bookId: bookId,
+        cancelledVersionId: task.newVersionId,
+        taskName: task.name
+      });
+    } else {
+      console.warn(`[BookCacheService] Task not found for cancellation: ${taskKey}`);
     }
   }
 
-  public accelerateAITask(bookId: number, taskKey: string): void {
+  public accelerateAITask(bookId: number, taskKey: string, onConsumeAIBudget?: (details: any) => boolean): void {
     let {
       bookData,
       bookAllVersion,
       BookAudio
     } = this.getBookContentById(bookId);
-    const [taskName, versionStr] = taskKey.split('_v');
-    const versionId = parseInt(versionStr, 10);
 
-    const task = bookAllVersion.runningAiTasks.find(
-      t => t.name === taskName && t.newVersionId === versionId
-    );
+    // Try to find by task ID first (new way), then fall back to old parsing method
+    let task = bookAllVersion.runningAiTasks.find(t => t.id === taskKey);
+    
+    if (!task) {
+      // Fall back to old method for backward compatibility
+      const [taskName, versionStr] = taskKey.split('_v');
+      const versionId = parseInt(versionStr, 10);
+      task = bookAllVersion.runningAiTasks.find(
+        t => t.name === taskName && t.newVersionId === versionId
+      );
+    }
 
     if (task) {
-      task.progress = Math.min(98, task.progress + 50);
+      // Calculate and charge acceleration cost (1.3x multiplier)
+      const currentVersionSentences = bookData.sentences.filter(s => s.version === bookAllVersion.currentVersionId).length;
+      const estimatedNewVersionSentences = Math.max(currentVersionSentences * 0.3, 5);
+      const accelerationCost = this.calculateConsumptionCost(currentVersionSentences, estimatedNewVersionSentences, 1.3);
+
+      // Check and consume AI budget for acceleration
+      if (onConsumeAIBudget) {
+        const consumptionSuccess = onConsumeAIBudget({
+          aiTask: `Accelerate ${task.name}`,
+          bookId: bookId,
+          version: task.newVersionId,
+          spentAmount: accelerationCost
+        });
+
+        if (!consumptionSuccess) {
+          console.warn(`Insufficient AI budget for accelerating task "${task.name}"`);
+          return;
+        }
+      }
+
+      task.progress = Math.min(99, task.progress + 30);
       this.saveBookContent(bookId, bookData, bookAllVersion, BookAudio);
+      
+      // Emit acceleration event for UI updates
+      uni.$emit('ai-task-accelerated', {
+        bookId: bookId,
+        taskId: task.id,
+        newProgress: task.progress,
+        taskName: task.name
+      });
     }
+  }
+
+  // --- Reading Progress Management ---
+
+  /**
+   * Updates the reading time for a book (cumulative across all versions).
+   * @param bookId The ID of the book
+   * @param additionalTime Time to add in seconds
+   */
+  public updateReadingTime(bookId: number, additionalTime: number): void {
+    const readerMetadata = this.getReaderMetadata(bookId);
+    if (readerMetadata) {
+      readerMetadata.readTime += additionalTime;
+      this.saveReaderMetadata(bookId, readerMetadata);
+    }
+  }
+
+  /**
+   * Sets the last read sentence ID for a specific version.
+   * This represents where the user is anchored in the library book and should be aligned to audio play reading progress bar.
+   * @param bookId The ID of the book
+   * @param versionId The version ID
+   * @param sentenceId The sentence ID to save as last read position
+   */
+  public setLastReadPosition(bookId: number, versionId: number, sentenceId: number): void {
+    const readerMetadata = this.getReaderMetadata(bookId);
+    if (readerMetadata) {
+      // Ensure the versionId exists in lastReadSentenceId mapping
+      if (!readerMetadata.lastReadSentenceId) {
+        readerMetadata.lastReadSentenceId = {};
+      }
+      readerMetadata.lastReadSentenceId[versionId] = sentenceId;
+      this.saveReaderMetadata(bookId, readerMetadata);
+      
+      console.log(`[BookCacheService] Saved reading position for book ${bookId}, version ${versionId}, sentence ${sentenceId}`);
+    }
+  }
+
+  /**
+   * Sets the last read scroll percentage for a specific version.
+   * This saves the scroll percentage to be restored when the user returns.
+   * @param bookId The ID of the book
+   * @param versionId The version ID
+   * @param scrollPercentage The scroll percentage (0-100) to save
+   */
+  public setLastReadScrollPercentage(bookId: number, versionId: number, scrollPercentage: number): void {
+    const readerMetadata = this.getReaderMetadata(bookId);
+    if (readerMetadata) {
+      // Ensure the versionId exists in lastReadScroll mapping
+      if (!readerMetadata.lastReadScroll) {
+        readerMetadata.lastReadScroll = {};
+      }
+      readerMetadata.lastReadScroll[versionId] = Math.min(100, Math.max(0, scrollPercentage));
+      this.saveReaderMetadata(bookId, readerMetadata);
+      
+      console.log(`[BookCacheService] Saved scroll percentage for book ${bookId}, version ${versionId}, percentage ${scrollPercentage.toFixed(1)}%`);
+    }
+  }
+
+  /**
+   * Gets the last read sentence ID for a specific version.
+   * This is used to restore the user's reading position when they return to the book.
+   * @param bookId The ID of the book
+   * @param versionId The version ID
+   * @returns The last read sentence ID for that version, or 0 if not found
+   */
+  public getLastReadPosition(bookId: number, versionId: number): number {
+    const readerMetadata = this.getReaderMetadata(bookId);
+    if (readerMetadata && readerMetadata.lastReadSentenceId && readerMetadata.lastReadSentenceId[versionId] !== undefined) {
+      return readerMetadata.lastReadSentenceId[versionId];
+    }
+    return 0; // Default to the beginning if no position is saved
+  }
+
+  /**
+   * Gets the last read scroll percentage for a specific version.
+   * This is used to restore the user's scroll position when they return to the book.
+   * @param bookId The ID of the book
+   * @param versionId The version ID
+   * @returns The last read scroll percentage for that version, or 0 if not found
+   */
+  public getLastReadScrollPercentage(bookId: number, versionId: number): number {
+    const readerMetadata = this.getReaderMetadata(bookId);
+    if (readerMetadata && readerMetadata.lastReadScroll && readerMetadata.lastReadScroll[versionId] !== undefined) {
+      return readerMetadata.lastReadScroll[versionId];
+    }
+    return 0; // Default to the beginning if no position is saved
+  }
+
+  /**
+   * Calculates the reading progress percentage for a specific version based on the last read sentence.
+   * This aligns with the audio play reading progress bar.
+   * @param bookId The ID of the book
+   * @param versionId The version ID
+   * @returns Progress percentage (0-100)
+   */
+  public getReadingProgressPercentage(bookId: number, versionId: number): number {
+    // First try to get from lastReadScroll which is more accurate
+    const scrollPercentage = this.getLastReadScrollPercentage(bookId, versionId);
+    if (scrollPercentage > 0) {
+      return scrollPercentage;
+    }
+
+    // Fallback to sentence-based calculation
+    const lastSentenceId = this.getLastReadPosition(bookId, versionId);
+    if (lastSentenceId === 0) {
+      return 0; // No progress made
+    }
+
+    const { bookData } = this.getBookContentById(bookId);
+    const versionSentences = bookData.sentences.filter(s => s.version === versionId);
+    
+    if (versionSentences.length === 0) {
+      return 0;
+    }
+
+    // Find the index of the last read sentence
+    const sentenceIndex = versionSentences.findIndex(s => s.sentenceId === lastSentenceId);
+    if (sentenceIndex === -1) {
+      return 0;
+    }
+
+    // Calculate percentage based on sentence position
+    const progress = ((sentenceIndex + 1) / versionSentences.length) * 100;
+    return Math.min(100, Math.max(0, progress));
+  }
+
+  /**
+   * Sets reading progress based on percentage and updates the corresponding sentence position.
+   * This allows the progress bar to control the reading position.
+   * @param bookId The ID of the book
+   * @param versionId The version ID  
+   * @param progressPercentage Progress percentage (0-100)
+   */
+  public setReadingProgressPercentage(bookId: number, versionId: number, progressPercentage: number): void {
+    // Save the scroll percentage directly
+    this.setLastReadScrollPercentage(bookId, versionId, progressPercentage);
+
+    // Also calculate and save the corresponding sentence position for backward compatibility
+    const { bookData } = this.getBookContentById(bookId);
+    const versionSentences = bookData.sentences.filter(s => s.version === versionId).sort((a, b) => a.sentenceId - b.sentenceId);
+    
+    if (versionSentences.length === 0) {
+      return;
+    }
+
+    // Calculate which sentence corresponds to this progress percentage
+    const clampedProgress = Math.min(100, Math.max(0, progressPercentage));
+    const sentenceIndex = Math.floor((clampedProgress / 100) * versionSentences.length);
+    const targetIndex = Math.min(sentenceIndex, versionSentences.length - 1);
+    
+    if (versionSentences[targetIndex]) {
+      this.setLastReadPosition(bookId, versionId, versionSentences[targetIndex].sentenceId);
+    }
+  }
+
+  /**
+   * Gets the total reading time across all versions.
+   * @param bookId The ID of the book
+   * @returns Total reading time in seconds
+   */
+  public getTotalReadingTime(bookId: number): number {
+    const readerMetadata = this.getReaderMetadata(bookId);
+    return readerMetadata ? readerMetadata.readTime : 0;
   }
 }
 

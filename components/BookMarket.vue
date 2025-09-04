@@ -3,7 +3,12 @@
 		<uni-grid :column="3" :show-border="false" :square="false" :highlight="false">
 			<uni-grid-item v-for="book in marketBooks" :index="book.marketId" :key="book.marketId">
 				<view class="grid-item-box" @click="selectBook(book)">
-					<image class="book-cover" :src="book.cover" mode="aspectFill"></image>
+					<image 
+						class="book-cover" 
+						:src="book.cover" 
+						:style="{ border: '1px solid ' + themeStyles.borderColor }"
+						mode="aspectFill">
+					</image>
 					<text class="book-title">{{ book.title }}</text>
 				</view>
 			</uni-grid-item>
@@ -17,6 +22,10 @@
 		props: {
 			marketBooks: {
 				type: Array,
+				required: true
+			},
+			themeStyles: {
+				type: Object,
 				required: true
 			}
 		},
@@ -51,10 +60,11 @@
 		line-height: 1.4em;
 		height: 2.8em;
 		text-align: center;
-		color: #333;
+		color: var(--theme-primary-text, #333);
 		width: 90px;
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
+		line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 		text-overflow: ellipsis;

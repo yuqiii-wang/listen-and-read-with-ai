@@ -1,56 +1,56 @@
 <template>
-	<view class="settings-container">
+	<view class="settings-container" :style="{ backgroundColor: themeStyles.backgroundColor }">
 		<!-- Audio Settings -->
-		<uni-list>
-			<uni-list-item title="Volume">
+		<uni-list :border="false">
+			<uni-list-item title="Volume" :border="false">
 				<template v-slot:footer>
 					<view class="setting-control">
 						<slider :value="volume" @change="onVolumeChange" min="0" max="100" step="1" style="width: 150px;"/>
-						<text class="value-display">{{ volume }}%</text>
+						<text class="value-display" :style="{ color: themeStyles.secondaryTextColor }">{{ volume }}%</text>
 					</view>
 				</template>
 			</uni-list-item>
 			
-			<uni-list-item title="Font Size">
+			<uni-list-item title="Font Size" :border="false">
 				<template v-slot:footer>
 					<view class="setting-control">
 						<slider :value="fontSize" @change="onFontSizeChange" min="12" max="24" step="1" style="width: 150px;"/>
-						<text class="value-display">{{ fontSize }}px</text>
+						<text class="value-display" :style="{ color: themeStyles.secondaryTextColor }">{{ fontSize }}px</text>
 					</view>
 				</template>
 			</uni-list-item>
 			
 			<!-- Speed slider with snapping behavior -->
-			<uni-list-item title="Speed">
+			<uni-list-item title="Speed" :border="false">
 				<template v-slot:footer>
 					<view class="setting-control">
 						<slider :value="playbackSpeed" @change="onSpeedChange" min="0.85" max="2.0" step="0.01" style="width: 150px;"/>
-						<text class="value-display">{{ playbackSpeed.toFixed(2) }}x</text>
+						<text class="value-display" :style="{ color: themeStyles.secondaryTextColor }">{{ playbackSpeed.toFixed(2) }}x</text>
 					</view>
 				</template>
 			</uni-list-item>
 
 			<!-- Voice Selection -->
-			<uni-list-item title="Voice" showArrow clickable @click="openVoiceActionSheet">
+			<uni-list-item title="Voice" showArrow clickable @click="openVoiceActionSheet" :border="false">
 				<template v-slot:footer>
-					<text class="selected-value">{{ voice }}</text>
+					<text class="selected-value" :style="{ color: themeStyles.secondaryTextColor }">{{ voice }}</text>
 				</template>
 			</uni-list-item>
 			
 			<!-- Background Theme Selection -->
-			<uni-list-item title="Background Theme" showArrow clickable @click="openBackgroundActionSheet">
+			<uni-list-item title="Background Theme" showArrow clickable @click="openBackgroundActionSheet" :border="false">
 				<template v-slot:footer>
 					<view class="setting-control">
 						<view class="color-indicator" :style="{ backgroundColor: selectedBackground.color }"></view>
-						<text class="selected-value">{{ selectedBackground.name }}</text>
+						<text class="selected-value" :style="{ color: themeStyles.secondaryTextColor }">{{ selectedBackground.name }}</text>
 					</view>
 				</template>
 			</uni-list-item>
 
 			<!-- Listening Mode Selection -->
-			<uni-list-item title="Listening Mode" showArrow clickable @click="openListeningModeActionSheet">
+			<uni-list-item title="Listening Mode" showArrow clickable @click="openListeningModeActionSheet" :border="false">
 				<template v-slot:footer>
-					<text class="selected-value">{{ selectedListeningMode }}</text>
+					<text class="selected-value" :style="{ color: themeStyles.secondaryTextColor }">{{ selectedListeningMode }}</text>
 				</template>
 			</uni-list-item>
 		</uni-list>
@@ -66,62 +66,82 @@
 		data() {
 			return {
 				volume: 80,
-				voice: 'Female Voice',
+				voice: '',
 				fontSize: 16,
 				playbackSpeed: 1.0,
-				voiceOptions: ['Female Voice', 'Male Voice', 'News Voice', 'Child Voice'],
-				// This object is for the UI, but we'll save only the name string.
+				voiceOptions: [],
 				selectedBackground: { name: 'White', color: '#FFFFFF' },
-				// These options map the theme names (as stored in the service) to their UI colors.
-				backgroundOptions: [
-					{ name: 'White', color: '#F8F9FA' },
-					{ name: 'Black', color: '#121212' },
-					{ name: 'Light Brown', color: '#FAF3E0' }
-				],
+				backgroundOptions: [],
 				selectedListeningMode: 'Once',
-				listeningModeOptions: ['Once', 'Repeat'],
-				speedAnchors: [0.85, 1.0, 1.2, 1.5, 2.0] // Anchors for speed slider
+				listeningModeOptions: [],
+				speedAnchors: [], 
+				themeStyles: {}
 			};
 		},
 		onShow() {
-			this.loadSettings();
+			this.loadAndApplyTheme();
+			this.loadAllSettings();
 		},
 		methods: {
-			// --- ALIGNED: Loading settings from settingsCacheService and mapping to data properties ---
-			loadSettings() {
+			loadAndApplyTheme() {
+				const settings = settingsCacheService.getSettings();
+				this.themeStyles = settingsCacheService.getThemeContent(settings.theme);
+				
+				// Set navigation bar styles based on the current theme
+				uni.setNavigationBarColor({
+					frontColor: this.themeStyles.navBar.textColor,
+					backgroundColor: this.themeStyles.navBar.backgroundColor
+				});
+				uni.setNavigationBarTitle({
+					title: 'Settings'
+				});
+			},
+			
+			loadAllSettings() {
+				// Load all settings values
 				const settings = settingsCacheService.getSettings();
 				this.volume = settings.volume;
 				this.voice = settings.voice;
 				this.fontSize = settings.fontSize;
-				this.playbackSpeed = settings.speed;
+				this.playbackSpeed = settings.audioSpeed;
+				this.selectedListeningMode = settings.repeatMode;
 
-				// ALIGNED: Load the theme name (string) and find the corresponding object for the UI.
+				// Load all options from the service
+				this.voiceOptions = settingsCacheService.getVoiceOptions();
+				this.listeningModeOptions = settingsCacheService.getRepeatModeOptions();
+				this.speedAnchors = settingsCacheService.getSpeedAnchors();
+				this.backgroundOptions = settingsCacheService.getAllThemes().map(themeName => {
+					const themeContent = settingsCacheService.getThemeContent(themeName);
+					return { name: themeName, color: themeContent.backgroundColor };
+				});
+
+				// Set the selected background based on the loaded theme
 				const themeName = settings.theme;
 				this.selectedBackground = this.backgroundOptions.find(opt => opt.name === themeName) || this.backgroundOptions[0];
-				
-				// ALIGNED: Load the listening mode from the 'SpeakingPerson' key.
-				this.selectedListeningMode = settings.SpeakingPerson;
 			},
+			
 			onVolumeChange(e) {
 				this.volume = e.detail.value;
 				settingsCacheService.saveVolume(this.volume);
 			},
+			
 			onFontSizeChange(e) {
 				this.fontSize = e.detail.value;
 				settingsCacheService.saveFontSize(this.fontSize);
 			},
+			
 			onSpeedChange(e) {
 				const sliderValue = parseFloat(e.detail.value);
-				// Find the closest anchor point
 				const closestSpeed = this.speedAnchors.reduce((prev, curr) => {
 					return (Math.abs(curr - sliderValue) < Math.abs(prev - sliderValue) ? curr : prev);
 				});
 
 				if (this.playbackSpeed !== closestSpeed) {
 					this.playbackSpeed = closestSpeed;
-					settingsCacheService.saveSpeed(this.playbackSpeed);
+					settingsCacheService.saveAudioSpeed(this.playbackSpeed);
 				}
 			},
+			
 			openVoiceActionSheet() {
 				uni.showActionSheet({
 					itemList: this.voiceOptions,
@@ -131,26 +151,26 @@
 					}
 				});
 			},
-			// --- ALIGNED: Saving the theme using saveTheme with only the name (string) ---
+			
 			openBackgroundActionSheet() {
 				const themeNames = this.backgroundOptions.map(theme => theme.name);
 				uni.showActionSheet({
 					itemList: themeNames,
 					success: (res) => {
-						// Update the UI with the full object
 						this.selectedBackground = this.backgroundOptions[res.tapIndex];
-						// Save only the name string, as per the data model
 						settingsCacheService.saveTheme(this.selectedBackground.name);
+						this.loadAndApplyTheme(); // Reload theme to apply changes
+						uni.$emit('themeChanged'); 
 					}
 				});
 			},
-			// --- ALIGNED: Saving the listening mode using saveSpeakingPerson ---
+			
 			openListeningModeActionSheet() {
 				uni.showActionSheet({
 					itemList: this.listeningModeOptions,
 					success: (res) => {
 						this.selectedListeningMode = this.listeningModeOptions[res.tapIndex];
-						settingsCacheService.saveSpeakingPerson(this.selectedListeningMode);
+						settingsCacheService.saveRepeatMode(this.selectedListeningMode);
 					}
 				});
 			}
@@ -161,6 +181,7 @@
 <style scoped>
 	.settings-container {
 		padding-bottom: 20px;
+		min-height: 100vh;
 	}
 
 	.setting-control {
@@ -171,14 +192,12 @@
 	
 	.value-display {
 		font-size: 14px;
-		color: #888;
 		width: 50px; /* Adjusted width for xx.xx format */
 		text-align: right;
 	}
 	
 	.selected-value {
 		font-size: 14px;
-		color: #888;
 	}
 
 	.color-indicator {

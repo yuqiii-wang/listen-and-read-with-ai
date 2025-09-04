@@ -1,79 +1,121 @@
 <template>
 	<view class="book-basic-info-overlay" @click.self="close">
-		<view class="book-basic-info-container">
+		<view class="book-basic-info-container" :style="containerStyle">
 			<image class="book-cover" :src="cover" mode="aspectFill"></image>
 			
 			<text class="book-title">{{ title }}</text>
 			
 			<view class="tags-container">
-				<text v-for="(tag, index) in tags" :key="index" class="tag">{{ tag }}</text>
+				<text v-for="(tag, index) in tags" :key="index" class="tag" :style="tagStyle">{{ tag }}</text>
 			</view>
 			
 			<view class="summary-container">
-				<text class="summary-title">Summary </text>
-				<text class="summary-content">{{ summary }}</text>
+				<text class="summary-title" :style="summaryTitleStyle">Summary </text>
+				<text class="summary-content" :style="summaryContentStyle">{{ summary }}</text>
 			</view>
 
 			<view class="button-group">
-				<button class="action-btn add-btn" @click="addToLibrary" :disabled="isAdded">
+				<button class="action-btn add-btn" @click="addToLibrary" :disabled="isAdded" :style="addButtonStyle">
 					{{ isAdded ? 'Added to Library' : 'Add to Library' }}
 				</button>
-				<button class="action-btn cancel-btn" @click="close">Cancel</button>
+				<button class="action-btn cancel-btn" @click="close" :style="cancelButtonStyle">Cancel</button>
 			</view>
 		</view>
 	</view>
 </template>
 
 <script>
-	import settingsService from '@/services/settingsService';
+	// ALIGNED: Import the correct BookCacheService
+	import bookCacheService from '@/services/BookCacheService';
+	import settingsCacheService from '@/services/settingsCacheService';
 
 	export default {
-		// MODIFIED: Component name added
 		name: 'BookMarketInfo',
 		props: {
-			// MODIFIED: Renamed 'marketId' to 'bookId'
 			bookId: { type: [String, Number], required: true },
-			userBookId: { type: [String, Number], default: '' },
 			cover: { type: String, default: '' },
 			title: { type: String, default: 'No Title' },
 			tags: { type: Array, default: () => [] },
-			tagsHide: { type: Array, default: () => [] },
 			summary: { type: String, default: 'No summary available.' }
 		},
 		data() {
 			return {
-				isAdded: false
+				isAdded: false,
+				themeStyles: {}
 			};
 		},
+		created() {
+			this.loadTheme();
+		},
 		watch: {
-			// MODIFIED: Watcher now observes 'bookId'
 			bookId: {
 				handler(newId) {
 					if (newId) {
-						this.isAdded = settingsService.isBookInLibrary(newId);
+						// ALIGNED: Check if book is in library using BookCacheService
+						const libraryBooks = bookCacheService.getLibraryBooks();
+						this.isAdded = libraryBooks.includes(parseInt(newId, 10));
 					}
 				},
 				immediate: true
 			}
 		},
-		methods: {
-			addToLibrary() {
-				const bookData = {
-					// MODIFIED: Changed property from 'marketId' to 'bookId'
-					bookId: this.bookId,
-					title: this.title,
-					cover: this.cover,
-					tags: this.tags,
-					tagsHide: this.tagsHide,
-					summary: this.summary
+		computed: {
+			containerStyle() {
+				return {
+					backgroundColor: this.themeStyles.backgroundColor,
+					color: this.themeStyles.primaryTextColor
 				};
-				settingsService.addBookToLibrary(bookData);
-				this.isAdded = true;
-				uni.showToast({
-					title: 'Added to library!',
-					icon: 'success'
-				});
-				this.$emit('added');
+			},
+			summaryTitleStyle() {
+				return {
+					color: this.themeStyles.primaryTextColor
+				};
+			},
+			summaryContentStyle() {
+				return {
+					color: this.themeStyles.secondaryTextColor
+				};
+			},
+			tagStyle() {
+				return {
+					backgroundColor: this.themeStyles.input?.backgroundColor || '#eee',
+					color: this.themeStyles.input?.textColor || '#555'
+				};
+			},
+			addButtonStyle() {
+				return {
+					backgroundColor: this.themeStyles.button?.backgroundColor || '#007AFF',
+					color: this.themeStyles.button?.textColor || 'white'
+				};
+			},
+			cancelButtonStyle() {
+				return {
+					backgroundColor: this.themeStyles.input?.backgroundColor || '#f2f2f2',
+					color: this.themeStyles.input?.textColor || '#333'
+				};
+			}
+		},
+		methods: {
+			loadTheme() {
+				const settings = settingsCacheService.getSettings();
+				this.themeStyles = settingsCacheService.getThemeContent(settings.theme);
+			},
+			addToLibrary() {
+				// ALIGNED: Use BookCacheService to add book to library
+				const success = bookCacheService.addBookToLibrary(parseInt(this.bookId, 10));
+				if (success) {
+					this.isAdded = true;
+					uni.showToast({
+						title: 'Added to library!',
+						icon: 'success'
+					});
+					this.$emit('added');
+				} else {
+					uni.showToast({
+						title: 'Failed to add to library',
+						icon: 'none'
+					});
+				}
 			},
 			close() {
 				this.$emit('close');
@@ -97,7 +139,6 @@
 	}
 
 	.book-basic-info-container {
-		background-color: white;
 		padding: 20px;
 		border-radius: 10px;
 		width: 80%;
@@ -138,8 +179,6 @@
 	}
 
 	.tag {
-		background-color: #eee;
-		color: #555;
 		padding: 5px 10px;
 		border-radius: 15px;
 		margin: 5px;
@@ -155,13 +194,11 @@
 	.summary-title {
 		font-size: 16px;
 		font-weight: 600;
-		color: #333;
 		margin-bottom: 8px;
 	}
 
 	.summary-content {
 		font-size: 14px;
-		color: #666;
 		line-height: 1.5;
 	}
 
@@ -182,8 +219,6 @@
 	}
 
 	.add-btn {
-		background-color: #007AFF;
-		color: white;
 	}
 	
 	.add-btn:disabled {
@@ -192,7 +227,5 @@
 	}
 
 	.cancel-btn {
-		background-color: #f2f2f2;
-		color: #333;
 	}
 </style>

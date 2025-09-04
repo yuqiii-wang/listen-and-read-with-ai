@@ -2,9 +2,9 @@
 const VOLUME_KEY = 'user_volume';
 const VOICE_KEY = 'user_voice';
 const FONT_SIZE_KEY = 'user_font_size';
-const SPEED_KEY = 'user_speed';
-const THEME_KEY = 'user_theme'; // Updated from BACKGROUND_KEY
-const LISTENING_MODE_KEY = 'user_listening_mode';
+const AUDIO_SPEED_KEY = 'user_audio_speed';
+const THEME_KEY = 'user_theme';
+const REPEAT_MODE_KEY = 'user_repeat_mode';
 const LIBRARY_BOOKS_KEY = 'user_library_books';
 const READING_TIME_KEY = 'user_reading_time'; // Key for total reading time
 
@@ -13,9 +13,9 @@ interface UserSettings {
     volume: number;
     voice: string;
     fontSize: number;
-    speed: number;
+    audioSpeed: number;
     theme: string;
-    SpeakingPerson: string;
+    repeatMode: string;
 }
 
 interface ThemeStyles {
@@ -42,6 +42,12 @@ interface ThemeStyles {
         backgroundColor: string;
         textColor: string;
     };
+    input: {
+        backgroundColor: string;
+        textColor: string;
+        borderColor: string;
+        placeholderColor: string;
+    };
 }
 
 const settingsCacheService = {
@@ -52,11 +58,11 @@ const settingsCacheService = {
     getSettings(): UserSettings {
         return {
             volume: uni.getStorageSync(VOLUME_KEY) || 80,
-            voice: uni.getStorageSync(VOICE_KEY) || 'Female Voice',
+            voice: uni.getStorageSync(VOICE_KEY) || 'Female',
             fontSize: uni.getStorageSync(FONT_SIZE_KEY) || 16,
-            speed: uni.getStorageSync(SPEED_KEY) || 1.0,
-            theme: uni.getStorageSync(THEME_KEY) || 'White', // Updated to theme
-            SpeakingPerson: uni.getStorageSync(LISTENING_MODE_KEY) || 'Once'
+            audioSpeed: uni.getStorageSync(AUDIO_SPEED_KEY) || 1.0,
+            theme: uni.getStorageSync(THEME_KEY) || 'White',
+            repeatMode: uni.getStorageSync(REPEAT_MODE_KEY) || 'Once'
         };
     },
 
@@ -68,33 +74,39 @@ const settingsCacheService = {
     getThemeContent(themeName: string): ThemeStyles {
         switch (themeName) {
             case 'Black':
-                // Dominant Colors: Deep Charcoal (#121212) and Light Gray (#E0E0E0)
+                // Dominant Colors: Deep Charcoal (#121212) and a softer, off-white for text.
                 return {
                     // General Colors
                     backgroundColor: '#121212',
-                    primaryTextColor: '#E0E0E0',
-                    secondaryTextColor: '#B0B0B0', // A softer gray for secondary text
-                    borderColor: '#444444',        // A darker gray for subtle borders
-                    activeColor: '#E0E0E0',        // Active elements use the primary text color
+                    primaryTextColor: '#DCDCDC',      // Softer than pure white for eye comfort
+                    secondaryTextColor: '#9E9E9E',    // A balanced gray for secondary information
+                    borderColor: '#555555',           // A lighter border to be visible on the dark background
+                    activeColor: '#DCDCDC',           // Active elements use the primary text color
 
                     // Component-specific styles
                     navBar: {
                         backgroundColor: '#1E1E1E', // Slightly lighter than the main background
-                        textColor: '#E0E0E0'
+                        textColor: '#DCDCDC'
                     },
                     tabBar: {
                         backgroundColor: '#1E1E1E',
-                        textColor: '#B0B0B0',
-                        activeTextColor: '#E0E0E0'
+                        textColor: '#9E9E9E',
+                        activeTextColor: '#DCDCDC'
                     },
                     listItem: {
-                        backgroundColor: '#1E1E1E',
-                        textColor: '#E0E0E0',
-                        borderColor: '#444444'
+                        backgroundColor: 'transparent',
+                        textColor: '#DCDCDC',
+                        borderColor: '#555555'
                     },
                     button: {
-                        backgroundColor: '#E0E0E0',
+                        backgroundColor: '#DCDCDC',
                         textColor: '#121212' // Inverted for good contrast
+                    },
+                    input: {
+                        backgroundColor: '#2C2C2C', // Softer dark background for inputs
+                        textColor: '#DCDCDC',
+                        borderColor: '#555555',
+                        placeholderColor: '#9E9E9E'
                     }
                 };
             case 'Light Brown':
@@ -125,6 +137,12 @@ const settingsCacheService = {
                     button: {
                         backgroundColor: '#5B4636',
                         textColor: '#FAF3E0' // Inverted for good contrast
+                    },
+                    input: {
+                        backgroundColor: '#F0E6DC', // Softer cream background for inputs
+                        textColor: '#5B4636',
+                        borderColor: '#D7CCC8',
+                        placeholderColor: '#8D6E63'
                     }
                 };
             case 'White':
@@ -156,6 +174,12 @@ const settingsCacheService = {
                     button: {
                         backgroundColor: '#212529',
                         textColor: '#F8F9FA' // Inverted for good contrast
+                    },
+                    input: {
+                        backgroundColor: '#FFFFFF', // Clean white background for inputs
+                        textColor: '#212529',
+                        borderColor: '#DEE2E6',
+                        placeholderColor: '#6C757D'
                     }
                 };
         }
@@ -164,10 +188,29 @@ const settingsCacheService = {
     saveVolume(volume: number) { uni.setStorageSync(VOLUME_KEY, volume); },
     saveVoice(voice: string) { uni.setStorageSync(VOICE_KEY, voice); },
     saveFontSize(size: number) { uni.setStorageSync(FONT_SIZE_KEY, size); },
-    saveSpeed(speed: number) { uni.setStorageSync(SPEED_KEY, speed); },
-    saveTheme(theme: string) { uni.setStorageSync(THEME_KEY, theme); }, // Updated to saveTheme
-    saveSpeakingPerson(mode: string) { uni.setStorageSync(LISTENING_MODE_KEY, mode); },
-    
+    saveAudioSpeed(speed: number) { uni.setStorageSync(AUDIO_SPEED_KEY, speed); },
+    saveTheme(theme: string) { uni.setStorageSync(THEME_KEY, theme); },
+    saveRepeatMode(mode: string) { uni.setStorageSync(REPEAT_MODE_KEY, mode); },
+
+    /**
+     * Retrieves all available theme names.
+     * @returns {string[]} An array of theme names.
+     */
+    getAllThemes(): string[] {
+        return ['White', 'Black', 'Light Brown'];
+    },
+	
+	getVoiceOptions(): string[] {
+		return ['Male', 'Female', 'Child', 'News'];
+	},
+	
+	getRepeatModeOptions(): string[] {
+		return ['Repeat All', 'Repeat Chapter', 'Once'];
+	},
+	
+	getSpeedAnchors(): number[] {
+		return [0.85, 1.0, 1.2, 1.5, 2.0];
+	}
 };
 
 export default settingsCacheService;

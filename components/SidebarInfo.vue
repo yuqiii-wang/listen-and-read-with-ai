@@ -12,7 +12,7 @@
 							<view class="menu-item-l1-title" @click="toggleSubmenu(menu.id)">
 								<!-- MODIFIED: Applied titleStyle -->
 								<text :style="titleStyle">{{ menu.name }}</text>
-								<uni-icons :type="activeMenuId === menu.id ? 'top' : 'bottom'" size="16" :color="theme.textColor"></uni-icons>
+								<uni-icons :type="activeMenuId === menu.id ? 'top' : 'bottom'" size="16" :color="theme.primaryTextColor"></uni-icons>
 							</view>
 							<view v-if="menu.id === 'userInput'" class="user-ask-description">
 								<!-- MODIFIED: Applied textStyle -->
@@ -58,7 +58,9 @@
 </template>
 
 <script>
-	import bookContentService from '@/services/bookContentService';
+	// ALIGNED: Import the correct bookCacheService
+	import bookCacheService from '@/services/bookCacheService';
+	import userProfileCacheService from '@/services/userProfileCacheService';
 
 	export default {
 		name: 'SidebarInfo',
@@ -67,7 +69,6 @@
 			bookId: { type: [String, Number], required: true },
 			mode: { type: String, default: 'default' },
 			userInputText: { type: String, default: '' },
-			// ADDED: theme prop
 			theme: { type: Object, required: true },
 		},
 		data() {
@@ -90,37 +91,35 @@
 			isDarkTheme() {
 				return this.theme.name === 'Black';
 			},
-			// --- ADDED: Computed styles for theming ---
+			// --- ALIGNED: Use theme properties consistently ---
 			sidebarStyle() {
-				return { backgroundColor: this.isDarkTheme ? '#1C1C1E' : '#FFFFFF' };
+				return { backgroundColor: this.theme.backgroundColor };
 			},
 			titleStyle() {
-				return { color: this.theme.textColor };
+				return { color: this.theme.primaryTextColor };
 			},
 			textStyle() {
-				return { color: this.isDarkTheme ? 'rgba(235, 235, 245, 0.8)' : '#333' };
+				return { color: this.theme.secondaryTextColor };
 			},
 			borderStyle() {
-				const borderColor = this.isDarkTheme ? 'rgba(255, 255, 255, 0.1)' : '#f0f0f0';
-				return { borderBottom: `1px solid ${borderColor}` };
+				return { borderBottom: `1px solid ${this.theme.borderColor}` };
 			},
 			submenuStyle() {
-				return { backgroundColor: this.isDarkTheme ? '#2C2C2E' : '#f7f7f7' };
+				return { backgroundColor: this.theme.listItem?.backgroundColor || this.theme.backgroundColor };
 			},
 			modalContentStyle() {
-				return { backgroundColor: this.isDarkTheme ? '#2C2C2E' : '#FFFFFF' };
+				return { backgroundColor: this.theme.backgroundColor };
 			},
 			modalTextStyle() {
-				return { color: this.theme.textColor };
+				return { color: this.theme.primaryTextColor };
 			},
 			modalTextareaStyle() {
 				return {
-					backgroundColor: this.isDarkTheme ? '#3A3A3C' : '#FFFFFF',
-					color: this.theme.textColor,
-					borderColor: this.isDarkTheme ? '#4A4A4C' : '#ccc',
+					backgroundColor: this.theme.backgroundColor,
+					color: this.theme.primaryTextColor,
+					borderColor: this.theme.borderColor,
 				};
 			},
-			// --- END: Computed styles ---
 			truncatedText() {
 				const text = this.userInputText;
 				if (!text) return '';
@@ -191,12 +190,17 @@
 				this.selectedSubmenu = null;
 			},
 			handleAskSubmit() {
-			    const taskName = this.selectedSubmenu ? this.selectedSubmenu.name : 'Custom AI Query';
-			    bookContentService.startAITask(this.bookId, taskName);
-			    this.$emit('task-started');
-			    this.hideAskModal();
-			    this.closeSidebar();
-			    uni.showToast({ title: 'AI task started...', icon: 'loading' });
+				// ALIGNED: Use BookCacheService for AI task management
+				const taskName = this.selectedSubmenu ? this.selectedSubmenu.name : 'Custom AI Query';
+				
+				// Use imported service and consumption callback
+				const consumeAIBudget = (details) => userProfileCacheService.logConsumption(details);
+				
+				bookCacheService.startAITask(parseInt(this.bookId, 10), taskName, consumeAIBudget);
+				this.$emit('task-started');
+				this.hideAskModal();
+				this.closeSidebar();
+				uni.showToast({ title: 'AI task started...', icon: 'loading' });
 			},
 		}
 	};

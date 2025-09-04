@@ -43,8 +43,8 @@
 </template>
 
 <script>
-	import settingsService from '@/services/settingsService';
-	import bookContentService from '@/services/bookContentService';
+	import settingsCacheService from '@/services/settingsCacheService';
+	import bookCacheService from '@/services/bookCacheService';
 
 	const createNode = (type, content) => ({
 		name: 'span',
@@ -116,15 +116,14 @@
 		},
 		methods: {
 			generateMergePreview() {
-				const bookData = bookContentService.getBookById(this.bookId);
-				if (!bookData) { this.bookTitle = "Error: Book not found."; return; }
+				const book = bookCacheService.getBookByBookId(this.bookId);
+				if (!book) { this.bookTitle = "Error: Book not found."; return; }
 
 				const sourceVersion = parseInt(this.sourceVersionId, 10);
 				const targetVersion = parseInt(this.targetVersionId, 10);
 
-				const sourceSentences = bookData.bookAllContents.filter(s => s.version === sourceVersion);
-				const baseSentences = bookData.bookAllContents.filter(s => s.version === targetVersion);
-				console.log(baseSentences);
+				const sourceSentences = book.content.sentences.filter(s => s.version === sourceVersion);
+				const baseSentences = book.content.sentences.filter(s => s.version === targetVersion);
 				const incomingContent = sourceSentences.map(s => s.content).join(' ');
 
 				const mergePos = parseInt(this.mergeStartSentencePos, 10);
@@ -187,9 +186,9 @@
 			stopAnimation() { if (this.animationTimer) clearInterval(this.animationTimer); },
 
 			loadAndApplySettings() {
-				const settings = settingsService.getSettings();
+				const settings = settingsCacheService.getSettings();
 				this.fontSize = settings.fontSize || 16;
-				this.applyTheme(settings.background || { name: 'White', color: '#FFFFFF' });
+				this.theme = settingsCacheService.getThemeContent(settings.theme);
 			},
 
 			applyTheme(themeSetting) {
@@ -215,10 +214,10 @@
 			},
 
 			handleCancelMerge() {
-				const bookData = bookContentService.getBookById(this.bookId);
-				if (bookData) {
+				const book = bookCacheService.getBookByBookId(this.bookId);
+				if (book) {
 					uni.navigateTo({
-						url: `/pages/library/LibraryBook?id=${this.bookId}&title=${encodeURIComponent(bookData.title)}`
+						url: `/pages/library/LibraryBook?id=${this.bookId}&title=${encodeURIComponent(book.metadata.title)}`
 					});
 				} else {
 					uni.navigateBack();
@@ -226,18 +225,18 @@
 			},
 			
 			handleConfirmMerge() {
-				const bookData = bookContentService.getBookById(this.bookId);
-				if (!bookData) {
+				const book = bookCacheService.getBookByBookId(this.bookId);
+				if (!book) {
 					uni.showToast({ title: 'Error: Book data not found.', icon: 'none' });
 					return;
 				}
 
 				const sourceVersion = parseInt(this.sourceVersionId, 10);
 				const targetVersion = parseInt(this.targetVersionId, 10);
-				const allVersionIds = bookData.history.map(h => h.id);
+				const allVersionIds = book.versions.allVersions.map(v => v.version);
 				const newVersionId = (allVersionIds.length > 0 ? Math.max(...allVersionIds) : 0) + 1;
 				const mergedContent = this.mergedNodes.map(node => node.children[0].text).join('').trim();
-				const maxSentenceId = Math.max(...bookData.bookAllContents.map(s => s.sentenceId)) || 0;
+				const maxSentenceId = Math.max(...book.content.sentences.map(s => s.sentenceId)) || 0;
 				
 				const newSentence = {
 					sentenceId: maxSentenceId + 1,
@@ -246,27 +245,33 @@
 					content: mergedContent,
 				};
 
-				const newBookAllContents = bookData.bookAllContents
+				const newBookAllContents = book.content.sentences
 					.filter(s => s.version !== sourceVersion && s.version !== targetVersion)
 					.concat(newSentence);
 
-				const newHistory = bookData.history
-					.filter(h => h.id !== sourceVersion && h.id !== targetVersion)
+				const newHistory = book.versions.allVersions
+					.filter(h => h.version !== sourceVersion && h.version !== targetVersion)
 					.concat({
-						id: newVersionId,
+						version: newVersionId,
 						taskName: `Merged v${sourceVersion} & v${targetVersion}`,
-						timestamp: new Date().toLocaleString()
+						versionCreatedAt: new Date().toLocaleString(),
+						isAiTaskInProgress: false
 					});
 
-				const updatedBookData = {
-					...bookData,
-					version: newVersionId,
-					versionCreatedAt: Date.now(),
-					history: newHistory,
-					bookAllContents: newBookAllContents,
+				const updatedBook = {
+					...book,
+					versions: {
+						...book.versions,
+						currentVersionId: newVersionId,
+						allVersions: newHistory,
+					},
+					content: {
+						...book.content,
+						sentences: newBookAllContents,
+					}
 				};
 
-				bookContentService.saveBook(this.bookId, updatedBookData);
+				bookCacheService.saveBook(updatedBook);
 				uni.showToast({ title: `Created new version ${newVersionId}`, icon: 'success' });
 
 				setTimeout(() => {

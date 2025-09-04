@@ -53,8 +53,6 @@
 			<book-audio-play
 				v-if="barsVisible"
 				:read-progress="readProgress"
-				:current-time="currentTime"
-				:estimated-read-time="estimatedReadTime"
 				:is-playing="isPlaying"
 				:theme="themeStyles"
 				@font-size-change="handleFontSizeChange"
@@ -62,6 +60,7 @@
 				@toggle-play="togglePlay"
 				@next-chapter="nextPage"
 				@volume-change="handleVolumeChange"
+				@progress-changed="handleProgressChanged"
 			></book-audio-play>
 		</uni-transition>
 
@@ -74,6 +73,7 @@
 	// --- ALIGNED: Using the correct service imports ---
 	import settingsCacheService from '@/services/settingsCacheService';
 	import bookCacheService from '@/services/BookCacheService';
+	import userProfileCacheService from '@/services/userProfileCacheService';
 
 	export default {
 		components: { BookAICheckBar, BookAudioPlay },
@@ -99,7 +99,12 @@
 				// --- Reader State ---
 				isPlaying: false,
 				readProgress: 0,
-				estimatedReadTime: 0,
+				
+				// --- Reading Progress Tracking ---
+				pageEnterTime: 0, // When the user entered this page
+				currentSentenceId: 0, // Current sentence being read
+				userScrollingActive: false, // Flag to prevent auto-scroll during user interaction
+				scrollingTimeout: null, // Timeout to detect when user stops scrolling
 				
 				// --- AI Interaction State ---
 				selectedText: '',
@@ -135,14 +140,6 @@
 					.join(' ');
 				return content || 'This version is empty.';
 			},
-			currentTime() {
-				if (this.estimatedReadTime === 0) return '0:00';
-				const totalSeconds = this.estimatedReadTime * 60;
-				const currentSeconds = Math.floor(totalSeconds * (this.readProgress / 100));
-				const minutes = Math.floor(currentSeconds / 60);
-				const seconds = currentSeconds % 60;
-				return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
-			},
 			// --- ALIGNED: Style computed properties now use the themeStyles object ---
 			bookTextStyle() {
 				return {
@@ -155,11 +152,17 @@
 			this.bookId = parseInt(options.id, 10);
 			this.loadAndApplySettings();
 			this.loadBookContent();
+			this.pageEnterTime = Date.now(); // Record when user enters the page
 		},
 		onShow() {
 			this.loadAndApplySettings();
 			// Re-load book content in case of external changes (e.g., AI task completion)
 			this.loadBookContent();
+			this.pageEnterTime = Date.now(); // Record when user returns to the page
+		},
+		onHide() {
+			// Save reading progress when user leaves the page (e.g., switches to another app)
+			this.saveReadingProgressAndTime();
 		},
 		onReady() {
 			uni.createSelectorQuery().in(this).select('.content-scroll').boundingClientRect(data => {
@@ -167,9 +170,12 @@
 			}).exec();
 		},
 		onUnload() {
-			this.saveReadingProgress();
+			this.saveReadingProgressAndTime();
 			if (this.taskUpdateInterval) {
 				clearInterval(this.taskUpdateInterval);
+			}
+			if (this.scrollingTimeout) {
+				clearTimeout(this.scrollingTimeout);
 			}
 		},
 		methods: {
@@ -206,12 +212,18 @@
 			handleInsertContent(payload) { /* Future Logic */ },
 			// --- ALIGNED: AI Task management now uses bookCacheService ---
 			handleCancelAiTask(taskKey) {
-				bookCacheService.cancelAITask(this.bookId, taskKey);
+				// Use imported service and consumption callback
+				const consumeAIBudget = (details) => userProfileCacheService.logConsumption(details);
+				
+				bookCacheService.cancelAITask(this.bookId, taskKey, consumeAIBudget);
 				uni.showToast({ title: `Cancelling ${taskKey.replace('_', ' ')}`, icon: 'none' });
 				this.refreshBookData();
 			},
 			handleAccelerateAiTask(taskKey) {
-				bookCacheService.accelerateAITask(this.bookId, taskKey);
+				// Use imported service and consumption callback
+				const consumeAIBudget = (details) => userProfileCacheService.logConsumption(details);
+				
+				bookCacheService.accelerateAITask(this.bookId, taskKey, consumeAIBudget);
 				uni.showToast({ title: 'Accelerate request sent!', icon: 'none' });
 			},
 			
@@ -241,13 +253,52 @@
 				}
 
 				this.updateCurrentView();
-				this.loadReadingProgress();
+				
+				// Only load reading progress on initial load, not on task updates
+				if (oldVersionIds.length === 0) {
+					// Initial load - reading progress already loaded by updateCurrentView()
+					console.log('[LibraryBook] Initial load completed with reading progress restored');
+				}
 
 				// Check for running AI tasks and set up an interval to refresh data
 				const hasActiveTasks = book.versions.runningAiTasks && book.versions.runningAiTasks.length > 0;
 				if (hasActiveTasks && !this.taskUpdateInterval) {
-					this.taskUpdateInterval = setInterval(() => this.loadBookContent(), 2000);
+					this.taskUpdateInterval = setInterval(() => this.refreshTaskDataOnly(), 2000);
 				} else if (!hasActiveTasks && this.taskUpdateInterval) {
+					clearInterval(this.taskUpdateInterval);
+					this.taskUpdateInterval = null;
+				}
+			},
+			
+			/**
+			 * Refreshes only task-related data without affecting reading position
+			 */
+			refreshTaskDataOnly() {
+				if (!this.bookId) return;
+
+				const oldVersionIds = this.allVersions.map(v => v.version);
+				
+				// Fetch the book object for task updates only
+				const book = bookCacheService.getBookByBookId(this.bookId);
+				if (!book) return;
+				
+				// Update task-related data
+				this.comprehensiveBook.versions.runningAiTasks = book.versions.runningAiTasks;
+				this.comprehensiveBook.versions.allVersions = book.versions.allVersions;
+				this.allVersions = book.versions.allVersions;
+
+				// Detect newly completed AI task versions
+				const newVersionIds = this.allVersions.map(v => v.version);
+				const completedVersionIds = newVersionIds.filter(id => !oldVersionIds.includes(id));
+				if (completedVersionIds.length > 0 && oldVersionIds.length > 0) {
+					this.justCompletedAIVersions = completedVersionIds;
+					// Only update content if new versions were completed
+					this.updateCurrentViewForNewVersions();
+				}
+
+				// Check if we should stop the interval (no more active tasks)
+				const hasActiveTasks = book.versions.runningAiTasks && book.versions.runningAiTasks.length > 0;
+				if (!hasActiveTasks && this.taskUpdateInterval) {
 					clearInterval(this.taskUpdateInterval);
 					this.taskUpdateInterval = null;
 				}
@@ -262,7 +313,27 @@
 				// Use custom title if available, otherwise fall back to version task name or metadata title
 				this.bookTitle = this.comprehensiveBook.readerMetadata.customTitle || (currentVersionInfo ? currentVersionInfo.taskName : this.comprehensiveBook.metadata.title);
 				
-				this.calculateReadTime();
+				// Load the reading progress for the current version immediately
+				this.loadReadingProgress();
+			},
+			
+			/**
+			 * Updates current view when new AI versions are completed, without disrupting reading position
+			 */
+			updateCurrentViewForNewVersions() {
+				if (!this.comprehensiveBook) return;
+				
+				// Update content data from the comprehensive book object
+				this.comprehensiveBook.content = bookCacheService.getBookContentById(this.bookId).bookData;
+				
+				// Filter sentences for the current version (in case new content was added)
+				this.currentBookSentences = this.comprehensiveBook.content.sentences.filter(item => item.version === this.currentVersionId);
+				
+				const currentVersionInfo = this.allVersions.find(v => v.version === this.currentVersionId);
+				// Use custom title if available, otherwise fall back to version task name or metadata title
+				this.bookTitle = this.comprehensiveBook.readerMetadata.customTitle || (currentVersionInfo ? currentVersionInfo.taskName : this.comprehensiveBook.metadata.title);
+				
+				// DON'T call loadReadingProgress() here to avoid disrupting current reading position
 			},
 			saveCurrentBookState() {
 				if (this.comprehensiveBook) {
@@ -288,13 +359,15 @@
 			handleSwitchVersion(versionId) {
 				if (this.currentVersionId === versionId) return;
 
+				// Save current reading progress before switching
+				this.saveReadingProgressAndTime();
+
 				// ALIGNED: Update the central comprehensiveBook object
 				this.currentVersionId = versionId;
 				this.comprehensiveBook.versions.currentVersionId = versionId;
 
-				this.updateCurrentView();
+				this.updateCurrentView(); // This already calls loadReadingProgress()
 				this.saveCurrentBookState();
-				this.loadReadingProgress(); // Load position for the new version
 				uni.showToast({ title: `Switched to: ${this.bookTitle}`, icon: 'none' });
 			},
 
@@ -317,39 +390,263 @@
 			
 			// --- Reading Progress ---
 			handleScroll(event) {
+				// Mark that user is actively scrolling
+				this.userScrollingActive = true;
+				
+				// Clear existing timeout and set new one to detect when scrolling stops
+				if (this.scrollingTimeout) {
+					clearTimeout(this.scrollingTimeout);
+				}
+				this.scrollingTimeout = setTimeout(() => {
+					this.userScrollingActive = false;
+					// Save scroll position when user stops scrolling to reduce frequency of saves
+					this.saveCurrentScrollPosition();
+				}, 1000); // Consider scrolling stopped after 1 second of inactivity
+				
 				this.currentScrollTop = event.detail.scrollTop;
 				const { scrollHeight } = event.detail;
 				const scrollableDistance = scrollHeight - this.scrollViewHeight;
-				if (scrollableDistance <= 0) { this.readProgress = 0; return; }
+				if (scrollableDistance <= 0) { 
+					this.readProgress = 0; 
+					return; 
+				}
+				
+				// Calculate reading progress percentage
 				this.readProgress = Math.min(100, Math.max(0, (this.currentScrollTop / scrollableDistance) * 100));
+				
+				// Update current sentence based on scroll progress and save reading position
+				this.updateCurrentSentenceFromScroll();
+				this.saveCurrentReadingPosition();
+				
+				console.log(`[LibraryBook] Scroll: ${this.readProgress.toFixed(1)}%, scrollTop: ${this.currentScrollTop}, scrollHeight: ${scrollHeight}`);
 			},
-			saveReadingProgress() { 
-				// ALIGNED: Save progress back to the readerMetadata object
-				if (this.comprehensiveBook) {
-					// A real implementation would convert scrollTop to the nearest sentenceId.
-					// For now, we'll store it in a custom property or reuse an existing one if suitable.
-					// Let's use readTime to store scroll position for simplicity in this example.
-					this.comprehensiveBook.readerMetadata.readTime = this.currentScrollTop;
-					this.saveCurrentBookState();
+			
+			updateCurrentSentenceFromScroll() {
+				if (!this.currentBookSentences || this.currentBookSentences.length === 0) return;
+				
+				// Calculate which sentence is currently being viewed based on scroll progress
+				const totalSentences = this.currentBookSentences.length;
+				const currentIndex = Math.floor((this.readProgress / 100) * totalSentences);
+				const clampedIndex = Math.max(0, Math.min(currentIndex, totalSentences - 1));
+				
+				if (this.currentBookSentences[clampedIndex]) {
+					this.currentSentenceId = this.currentBookSentences[clampedIndex].sentenceId;
 				}
 			},
-			loadReadingProgress() {
-				if (this.comprehensiveBook) {
-					// Using readTime as a placeholder for the last scroll position
-					const pos = this.comprehensiveBook.readerMetadata.readTime || 0;
-					// Use nextTick to ensure the DOM is ready before setting scrollTop
-					this.$nextTick(() => { this.scrollTop = pos; this.currentScrollTop = pos; });
+			
+			/**
+			 * Saves the current scroll position immediately (for real-time updates)
+			 */
+			saveCurrentScrollPosition() {
+				if (!this.comprehensiveBook || this.readProgress < 0) return;
+				
+				// Save current scroll percentage for this version
+				bookCacheService.setLastReadScrollPercentage(this.bookId, this.currentVersionId, this.readProgress);
+				console.log(`[LibraryBook] Saved scroll position: ${this.readProgress.toFixed(1)}%`);
+			},
+			
+			/**
+			 * Saves the current reading position immediately (for real-time updates)
+			 */
+			saveCurrentReadingPosition() {
+				if (!this.comprehensiveBook || this.currentSentenceId <= 0) return;
+				
+				// Save current reading position for this version using the enhanced method
+				bookCacheService.setLastReadPosition(this.bookId, this.currentVersionId, this.currentSentenceId);
+			},
+			
+			saveReadingProgressAndTime() { 
+				if (!this.comprehensiveBook) return;
+				
+				// Calculate and save reading time spent on this page
+				const timeSpent = Math.floor((Date.now() - this.pageEnterTime) / 1000); // Convert to seconds
+				if (timeSpent > 0) {
+					bookCacheService.updateReadingTime(this.bookId, timeSpent);
+				}
+				
+				// Save current scroll position for this version (final save on page leave)
+				if (this.readProgress >= 0) {
+					bookCacheService.setLastReadScrollPercentage(this.bookId, this.currentVersionId, this.readProgress);
+				}
+				
+				// Save current reading position for this version (final save on page leave)
+				if (this.currentSentenceId > 0) {
+					bookCacheService.setLastReadPosition(this.bookId, this.currentVersionId, this.currentSentenceId);
+				}
+				
+				// Reset the page enter time for next session
+				this.pageEnterTime = Date.now();
+				
+				console.log(`[LibraryBook] Saved final progress: ${this.readProgress.toFixed(1)}%, sentence: ${this.currentSentenceId}`);
+			},
+			
+			/**
+			 * Loads and restores the reading progress when user enters or returns to the book
+			 * @param {boolean} forceScroll - Whether to force scrolling to the saved position
+			 */
+			loadReadingProgress(forceScroll = true) {
+				if (!this.comprehensiveBook) return;
+				
+				// Load the saved scroll percentage for the current version (more accurate than sentence-based)
+				const savedScrollPercentage = bookCacheService.getLastReadScrollPercentage(this.bookId, this.currentVersionId);
+				
+				if (savedScrollPercentage > 0) {
+					// Set the progress bar to match the saved scroll position
+					this.readProgress = savedScrollPercentage;
+					
+					// Only scroll if explicitly requested (e.g., on initial load or version switch)
+					if (forceScroll) {
+						this.scrollToPercentage(savedScrollPercentage, true); // Force scroll when loading progress
+					}
+				} else {
+					// Fallback to sentence-based progress if no scroll percentage is saved
+					const savedProgress = bookCacheService.getReadingProgressPercentage(this.bookId, this.currentVersionId);
+					
+					if (savedProgress > 0) {
+						this.readProgress = savedProgress;
+						
+						if (forceScroll) {
+							this.scrollToPercentage(savedProgress, true);
+						}
+					} else {
+						// No saved progress, start from beginning
+						this.readProgress = 0;
+						this.currentSentenceId = 0;
+					}
+				}
+				
+				console.log(`[LibraryBook] Loaded reading progress: ${this.readProgress.toFixed(1)}%, forceScroll: ${forceScroll}`);
+			},
+			
+			/**
+			 * Scrolls to a specific percentage position
+			 */
+			scrollToPercentage(percentage, forceScroll = false) {
+				// Don't auto-scroll if user is actively scrolling, unless forced
+				if (this.userScrollingActive && !forceScroll) {
+					console.log(`[LibraryBook] Skipping auto-scroll to ${percentage.toFixed(1)}% - user is actively scrolling`);
+					return;
+				}
+				
+				this.readProgress = Math.min(100, Math.max(0, percentage));
+				
+				// Calculate scroll position based on progress percentage
+				// Use a selector query to get the actual scroll height
+				this.$nextTick(() => {
+					uni.createSelectorQuery().in(this).select('.content-scroll').scrollOffset((res) => {
+						if (res && res.scrollHeight) {
+							const scrollableDistance = res.scrollHeight - this.scrollViewHeight;
+							const targetScrollTop = Math.floor((percentage / 100) * scrollableDistance);
+							
+							this.scrollTop = targetScrollTop;
+							this.currentScrollTop = targetScrollTop;
+							
+							console.log(`[LibraryBook] Scrolled to ${percentage.toFixed(1)}% progress (scrollTop: ${targetScrollTop}) (forceScroll: ${forceScroll})`);
+						} else {
+							// Fallback to estimated scroll if query fails
+							const estimatedScrollTop = Math.floor((percentage / 100) * 3000);
+							this.scrollTop = estimatedScrollTop;
+							this.currentScrollTop = estimatedScrollTop;
+							
+							console.log(`[LibraryBook] Fallback scroll to ${percentage.toFixed(1)}% progress (estimated scrollTop: ${estimatedScrollTop}) (forceScroll: ${forceScroll})`);
+						}
+					}).exec();
+				});
+				
+				// Update current sentence based on the new position
+				this.updateCurrentSentenceFromScroll();
+			},
+
+			/**
+			 * Scrolls to a specific sentence and updates the progress accordingly
+			 */
+			scrollToSentence(sentenceId, forceScroll = false) {
+				// Don't auto-scroll if user is actively scrolling, unless forced
+				if (this.userScrollingActive && !forceScroll) {
+					console.log(`[LibraryBook] Skipping auto-scroll to sentence ${sentenceId} - user is actively scrolling`);
+					return;
+				}
+				
+				// Find the sentence in current version
+				const sentenceIndex = this.currentBookSentences.findIndex(s => s.sentenceId === sentenceId);
+				if (sentenceIndex >= 0 && this.currentBookSentences.length > 0) {
+					// Calculate progress based on sentence index
+					const progress = (sentenceIndex / this.currentBookSentences.length) * 100;
+					this.readProgress = Math.min(100, Math.max(0, progress));
+					
+					// Calculate scroll position based on progress
+					// This is an approximation - in a real implementation you might want to measure actual text heights
+					const estimatedScrollTop = Math.floor((progress / 100) * 3000); // Approximate scroll value
+					
+					this.$nextTick(() => { 
+						this.scrollTop = estimatedScrollTop; 
+						this.currentScrollTop = estimatedScrollTop; 
+					});
+					
+					this.currentSentenceId = sentenceId;
+					console.log(`[LibraryBook] Scrolled to sentence ${sentenceId} at ${progress.toFixed(1)}% progress (forceScroll: ${forceScroll})`);
+				}
+			},
+			
+			/**
+			 * Updates reading progress when audio progress changes (if audio controls are used)
+			 */
+			syncProgressWithAudio(audioProgressPercentage) {
+				if (!this.currentBookSentences || this.currentBookSentences.length === 0) return;
+				
+				// Update the visual progress
+				this.readProgress = audioProgressPercentage;
+				
+				// Save the scroll percentage
+				this.saveCurrentScrollPosition();
+				
+				// Calculate corresponding sentence and update position
+				const totalSentences = this.currentBookSentences.length;
+				const currentIndex = Math.floor((audioProgressPercentage / 100) * totalSentences);
+				const clampedIndex = Math.max(0, Math.min(currentIndex, totalSentences - 1));
+				
+				if (this.currentBookSentences[clampedIndex]) {
+					const newSentenceId = this.currentBookSentences[clampedIndex].sentenceId;
+					if (newSentenceId !== this.currentSentenceId) {
+						this.currentSentenceId = newSentenceId;
+						// Save the new position immediately
+						bookCacheService.setLastReadPosition(this.bookId, this.currentVersionId, this.currentSentenceId);
+						// Optionally scroll to the new position
+						this.scrollToPercentage(audioProgressPercentage);
+					}
 				}
 			},
 
 			// --- Misc ---
-			calculateReadTime() {
-				const words = this.bookContent.split(/\s+/).filter(Boolean);
-				this.estimatedReadTime = Math.ceil(words.length / 225); // Average reading speed
-			},
 			togglePlay() { this.isPlaying = !this.isPlaying; },
 			nextPage() { this.scrollTop = this.currentScrollTop + this.scrollViewHeight; },
-			handleVolumeChange(newVolume) { settingsCacheService.saveVolume(newVolume); }
+			handleVolumeChange(newVolume) { settingsCacheService.saveVolume(newVolume); },
+			
+			/**
+			 * Handles progress changes from the audio progress bar
+			 */
+			handleProgressChanged(newProgressPercentage) {
+				if (!this.comprehensiveBook) return;
+				
+				// Update the visual progress immediately
+				this.readProgress = newProgressPercentage;
+				
+				// Save the scroll percentage directly
+				bookCacheService.setLastReadScrollPercentage(this.bookId, this.currentVersionId, newProgressPercentage);
+				
+				// Use the enhanced service method to set reading position based on progress percentage
+				bookCacheService.setReadingProgressPercentage(this.bookId, this.currentVersionId, newProgressPercentage);
+				
+				// Get the updated sentence position and sync the view
+				const newSentenceId = bookCacheService.getLastReadPosition(this.bookId, this.currentVersionId);
+				if (newSentenceId !== this.currentSentenceId) {
+					this.currentSentenceId = newSentenceId;
+					// Scroll to the new position to keep everything in sync (force scroll since user initiated)
+					this.scrollToPercentage(newProgressPercentage, true);
+				}
+				
+				console.log(`[LibraryBook] Progress changed to ${newProgressPercentage.toFixed(1)}%, sentence ${newSentenceId}`);
+			}
 		}
 	}
 </script>
